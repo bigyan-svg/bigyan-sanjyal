@@ -6,6 +6,13 @@ import {
   hashSessionToken,
   isCurrentDevelopmentSessionToken,
 } from "./session-token";
+import {
+  ADMIN_SESSION_ACTIVITY_UPDATE_INTERVAL_MS,
+  ADMIN_SESSION_IDLE_TIMEOUT_MS,
+  isAdminSessionCurrentAt,
+  shouldUpdateAdminSessionActivity,
+} from "./session-policy";
+import { revokeAdminSession } from "./session-revocation";
 
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -19,10 +26,97 @@ function getValidTimestamp(value: unknown): number | null {
 }
 
 async function revokeSession(sessionId: string): Promise<void> {
-  await prisma.adminSession.updateMany({
-    where: { id: sessionId, revokedAt: null },
-    data: { revokedAt: new Date() },
+  await revokeAdminSession(sessionId, {
+    updateMany: (args) => prisma.adminSession.updateMany(args),
   });
+}
+
+async function isSessionStillCurrent(
+  sessionId: string,
+  userId: string,
+  now: number,
+): Promise<boolean> {
+  const session = await prisma.adminSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      createdAt: true,
+      expiresAt: true,
+      lastSeenAt: true,
+      revokedAt: true,
+      user: {
+        select: {
+          id: true,
+          isActive: true,
+        },
+      },
+    },
+  });
+
+  if (
+    !session ||
+    session.revokedAt !== null ||
+    session.user.id !== userId ||
+    !session.user.isActive ||
+    !isAdminSessionCurrentAt(session.expiresAt, session.lastSeenAt, now)
+  ) {
+    return false;
+  }
+
+  const [passwordTimestampComparison] = await prisma.$queryRaw<
+    { isOlderThanPasswordChange: boolean | null }[]
+  >`
+    SELECT (
+      admin_session."createdAt" < admin_user."passwordChangedAt"
+    ) AS "isOlderThanPasswordChange"
+    FROM "AdminSession" AS admin_session
+    INNER JOIN "AdminUser" AS admin_user
+      ON admin_user."id" = admin_session."userId"
+    WHERE admin_session."id" = ${sessionId}
+      AND admin_session."userId" = ${userId}
+      AND admin_session."revokedAt" IS NULL
+  `;
+
+  return passwordTimestampComparison?.isOlderThanPasswordChange === false;
+}
+
+async function updateSessionActivity(
+  sessionId: string,
+  userId: string,
+  createdAt: Date,
+  lastSeenAt: Date,
+  now: number,
+): Promise<boolean> {
+  if (!shouldUpdateAdminSessionActivity(lastSeenAt, now)) {
+    return true;
+  }
+
+  const nowDate = new Date(now);
+  const idleCutoff = new Date(now - ADMIN_SESSION_IDLE_TIMEOUT_MS);
+  const updateCutoff = new Date(now - ADMIN_SESSION_ACTIVITY_UPDATE_INTERVAL_MS);
+  const result = await prisma.adminSession.updateMany({
+    where: {
+      id: sessionId,
+      userId,
+      revokedAt: null,
+      expiresAt: { gt: nowDate },
+      lastSeenAt: { gt: idleCutoff, lte: updateCutoff },
+      user: {
+        is: {
+          isActive: true,
+          passwordChangedAt: { lte: createdAt },
+        },
+      },
+    },
+    data: { lastSeenAt: nowDate },
+  });
+
+  if (result.count === 1) {
+    return true;
+  }
+
+  // Another request may have refreshed this session first. Re-read after a
+  // conditional update miss so concurrent authenticated requests stay valid.
+  return isSessionStillCurrent(sessionId, userId, now);
 }
 
 export interface ValidatedAdminSession {
@@ -52,6 +146,7 @@ export async function validateAdminSession(
       id: true,
       createdAt: true,
       expiresAt: true,
+      lastSeenAt: true,
       revokedAt: true,
       user: {
         select: {
@@ -71,9 +166,15 @@ export async function validateAdminSession(
 
   const createdAt = getValidTimestamp(session.createdAt);
   const expiresAt = getValidTimestamp(session.expiresAt);
+  const lastSeenAt = getValidTimestamp(session.lastSeenAt);
   const passwordChangedAt = getValidTimestamp(session.user.passwordChangedAt);
 
-  if (createdAt === null || expiresAt === null || passwordChangedAt === null) {
+  if (
+    createdAt === null ||
+    expiresAt === null ||
+    lastSeenAt === null ||
+    passwordChangedAt === null
+  ) {
     await revokeSession(session.id);
     return null;
   }
@@ -105,7 +206,24 @@ export async function validateAdminSession(
     return null;
   }
 
-  if (expiresAt <= Date.now() || !session.user.isActive) {
+  const now = Date.now();
+
+  if (
+    !session.user.isActive ||
+    !isAdminSessionCurrentAt(session.expiresAt, session.lastSeenAt, now)
+  ) {
+    return null;
+  }
+
+  if (
+    !(await updateSessionActivity(
+      session.id,
+      session.user.id,
+      session.createdAt,
+      session.lastSeenAt,
+      now,
+    ))
+  ) {
     return null;
   }
 

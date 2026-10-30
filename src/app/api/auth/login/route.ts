@@ -204,7 +204,7 @@ export async function POST(request: Request): Promise<Response> {
     const session = await createAdminSession(adminUser.id, {
       expectedPasswordHash: adminUser.passwordHash,
     });
-    await setAdminSessionCookie(session.token, session.expiresAt);
+    await setAdminSessionCookie(session.token);
 
     return Response.json(
       { success: true },

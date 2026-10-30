@@ -12,7 +12,6 @@ export interface CreateAdminSessionOptions {
 
 export interface CreatedAdminSession {
   token: string;
-  expiresAt: Date;
 }
 
 export async function createAdminSession(
@@ -61,5 +60,5 @@ export async function createAdminSession(
     });
   });
 
-  return { token, expiresAt };
+  return { token };
 }

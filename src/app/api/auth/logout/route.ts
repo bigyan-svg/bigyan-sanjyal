@@ -3,6 +3,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { clearAdminSessionCookie } from "@/lib/auth/cookies";
 import { hasTrustedRequestOrigin } from "@/lib/auth/origin";
+import { revokeAdminSession } from "@/lib/auth/session-revocation";
 import { validateAdminSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
 
@@ -33,12 +34,8 @@ export async function POST(request: Request): Promise<Response> {
       const session = await validateAdminSession(token);
 
       if (session) {
-        await prisma.adminSession.updateMany({
-          where: {
-            id: session.sessionId,
-            revokedAt: null,
-          },
-          data: { revokedAt: new Date() },
+        await revokeAdminSession(session.sessionId, {
+          updateMany: (args) => prisma.adminSession.updateMany(args),
         });
       }
     }
