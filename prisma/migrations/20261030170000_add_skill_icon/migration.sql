@@ -1,0 +1,2 @@
+ALTER TABLE "Skill"
+ADD COLUMN "icon" VARCHAR(80);
