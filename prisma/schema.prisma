@@ -13,6 +13,13 @@ enum ContentStatus {
   ARCHIVED
 }
 
+enum ProjectLinkType {
+  GITHUB_REPOSITORY
+  LIVE_DEMO
+  DOCUMENTATION
+  OTHER
+}
+
 enum ContactMessageStatus {
   NEW
   READ
@@ -121,6 +128,7 @@ model Project {
 model ProjectLink {
   id        String   @id @default(uuid()) @db.Uuid
   projectId String   @db.Uuid
+  type      ProjectLinkType @default(OTHER)
   label     String   @db.VarChar(80)
   url       String   @db.Text
   sortOrder Int      @default(0)

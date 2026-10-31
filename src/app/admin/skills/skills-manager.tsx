@@ -2,7 +2,6 @@
 
 import {
   CheckCircle2,
-  CirclePlus,
   FolderPlus,
   LoaderCircle,
   Pencil,
@@ -11,13 +10,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ContentStatus } from "@/generated/prisma/client";
 import { SkillIcon } from "@/components/skills/skill-icon";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { TextArea, TextInput } from "@/components/ui/form-field";
 import { SKILL_ICON_OPTIONS } from "@/lib/skill-icons";
+import { confirmDiscardIfDirty, hasUnsavedChanges } from "@/lib/unsaved-changes";
 import type { SkillCategoryItem, SkillItem } from "@/lib/skill-types";
 
 type SkillFormValues = {
@@ -63,6 +63,16 @@ function responseFields(result: unknown): SkillFieldErrors {
   return {};
 }
 
+function logCategorySaveDiagnostic(details: {
+  phase: "network" | "non-json-response" | "invalid-success-response";
+  errorName?: string;
+  status?: number;
+  contentType?: string | null;
+}): void {
+  if (process.env.NODE_ENV !== "development") return;
+  console.error("Admin skill category save diagnostic.", details);
+}
+
 function getNextSortOrder(categoryId: string, skills: SkillItem[]): number {
   return (
     skills
@@ -99,13 +109,28 @@ export function SkillsManager({
   const [skills, setSkills] = useState(initialSkills);
   const [editor, setEditor] = useState<{ skill: SkillItem | null } | null>(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<SkillCategoryItem | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [pendingCategoryDelete, setPendingCategoryDelete] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [pageError, setPageError] = useState("");
   const [pageSuccess, setPageSuccess] = useState("");
+  const skillFormDirtyRef = useRef(false);
+  const categoryFormDirtyRef = useRef(false);
+
+  function canDismissCurrentForm(): boolean {
+    if (editor && !confirmDiscardIfDirty(skillFormDirtyRef.current)) return false;
+    if ((showCategoryForm || editingCategory) && !confirmDiscardIfDirty(categoryFormDirtyRef.current)) return false;
+
+    skillFormDirtyRef.current = false;
+    categoryFormDirtyRef.current = false;
+    return true;
+  }
 
   function saveSkill(skill: SkillItem) {
+    skillFormDirtyRef.current = false;
     setSkills((current) => sortedSkills([
       ...current.filter((item) => item.id !== skill.id),
       skill,
@@ -115,13 +140,61 @@ export function SkillsManager({
     setPageSuccess("Skill details saved.");
   }
 
-  function addCategory(category: SkillCategoryItem) {
-    setCategories((current) => [...current, category].sort(
+  function saveCategory(category: SkillCategoryItem) {
+    categoryFormDirtyRef.current = false;
+    const isUpdate = categories.some((item) => item.id === category.id);
+    setCategories((current) => [
+      ...current.filter((item) => item.id !== category.id),
+      category,
+    ].sort(
       (left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name),
     ));
     setShowCategoryForm(false);
+    setEditingCategory(null);
     setPageError("");
-    setPageSuccess("Category added. You can now assign skills to it.");
+    setPageSuccess(
+      isUpdate ? "Category details saved." : "Category added. You can now assign skills to it.",
+    );
+  }
+
+  async function deleteCategory(category: SkillCategoryItem) {
+    if (deletingCategoryId) return;
+
+    const skillCount = skills.filter((skill) => skill.categoryId === category.id).length;
+    if (skillCount > 0) {
+      setPendingCategoryDelete(null);
+      setPageSuccess("");
+      setPageError(
+        `Cannot delete "${category.name}" because it contains ${skillCount} ${skillCount === 1 ? "skill" : "skills"}. Remove or reassign them first.`,
+      );
+      return;
+    }
+
+    setDeletingCategoryId(category.id);
+    setPageError("");
+    setPageSuccess("");
+
+    try {
+      const response = await fetch(`/api/admin/skills/categories/${category.id}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const result: unknown = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        setPageError(responseError(result, "Unable to delete the category. Please try again."));
+        return;
+      }
+
+      setCategories((current) => current.filter((item) => item.id !== category.id));
+      setPendingCategoryDelete(null);
+      setPageSuccess("Category deleted.");
+    } catch {
+      setPageError("Unable to delete the category. Please try again.");
+    } finally {
+      setDeletingCategoryId(null);
+    }
   }
 
   async function changeStatus(skill: SkillItem) {
@@ -198,7 +271,13 @@ export function SkillsManager({
         <div className="skill-management__toolbar-actions">
           <Button
             onClick={() => {
-              setShowCategoryForm((visible) => !visible);
+              if (!canDismissCurrentForm()) return;
+              if (showCategoryForm) {
+                setShowCategoryForm(false);
+              } else {
+                setEditingCategory(null);
+                setShowCategoryForm(true);
+              }
               setEditor(null);
             }}
             variant="secondary"
@@ -209,8 +288,10 @@ export function SkillsManager({
           <Button
             disabled={categories.length === 0}
             onClick={() => {
+              if (!canDismissCurrentForm()) return;
               setEditor({ skill: null });
               setShowCategoryForm(false);
+              setEditingCategory(null);
             }}
           >
             <Plus aria-hidden="true" size={17} />
@@ -231,19 +312,31 @@ export function SkillsManager({
         </p>
       ) : null}
 
-      {showCategoryForm ? (
+      {showCategoryForm || editingCategory ? (
         <CategoryForm
-          onCancel={() => setShowCategoryForm(false)}
-          onCreated={addCategory}
+          key={editingCategory?.id ?? "new-category"}
+          initialCategory={editingCategory}
+          onCancel={() => {
+            if (!canDismissCurrentForm()) return;
+            setShowCategoryForm(false);
+            setEditingCategory(null);
+          }}
+          onDirtyChange={(isDirty) => { categoryFormDirtyRef.current = isDirty; }}
+          onSaved={saveCategory}
         />
       ) : null}
 
       {editor ? (
         <SkillEditor
+          key={editor.skill?.id ?? "new-skill"}
           categories={categories}
           initialSkill={editor.skill}
           skills={skills}
-          onCancel={() => setEditor(null)}
+          onCancel={() => {
+            if (!canDismissCurrentForm()) return;
+            setEditor(null);
+          }}
+          onDirtyChange={(isDirty) => { skillFormDirtyRef.current = isDirty; }}
           onSaved={saveSkill}
         />
       ) : null}
@@ -253,19 +346,12 @@ export function SkillsManager({
           <FolderPlus aria-hidden="true" size={24} />
           <h3>Create a category to get started</h3>
           <p>Skills need a category before they can be added. Add only categories you want to use.</p>
-          <Button onClick={() => setShowCategoryForm(true)}>
+          <Button onClick={() => {
+            if (!canDismissCurrentForm()) return;
+            setShowCategoryForm(true);
+          }}>
             <FolderPlus aria-hidden="true" size={17} />
             Add a category
-          </Button>
-        </Card>
-      ) : skills.length === 0 ? (
-        <Card className="skill-management__empty" variant="outlined">
-          <CirclePlus aria-hidden="true" size={24} />
-          <h3>No skills have been added</h3>
-          <p>Add confirmed skill details when you are ready. New skills stay in draft by default.</p>
-          <Button onClick={() => setEditor({ skill: null })}>
-            <Plus aria-hidden="true" size={17} />
-            Add a skill
           </Button>
         </Card>
       ) : (
@@ -285,14 +371,61 @@ export function SkillsManager({
                   <div>
                     <p className="eyebrow">Category</p>
                     <h3 id={`skill-category-${category.id}`}>{category.name}</h3>
+                    {category.description ? (
+                      <p className="skill-management__category-description">{category.description}</p>
+                    ) : null}
                   </div>
-                  <span className="skill-management__count">
-                    {categorySkills.length} {categorySkills.length === 1 ? "skill" : "skills"}
-                  </span>
+                  <div className="skill-management__group-tools">
+                    <span className="skill-management__count">
+                      {categorySkills.length} {categorySkills.length === 1 ? "skill" : "skills"}
+                    </span>
+                    <div className="skill-management__category-actions">
+                      <Button
+                        disabled={Boolean(updatingId || deletingId || deletingCategoryId)}
+                        onClick={() => {
+                          if (!canDismissCurrentForm()) return;
+                          setEditingCategory(category);
+                          setShowCategoryForm(false);
+                          setEditor(null);
+                          setPendingCategoryDelete(null);
+                          setPageError("");
+                        }}
+                        size="small"
+                        variant="subtle"
+                      >
+                        <Pencil aria-hidden="true" size={15} />
+                        Edit
+                      </Button>
+                      <Button
+                        disabled={Boolean(updatingId || deletingId || deletingCategoryId)}
+                        onClick={() => {
+                          if (!canDismissCurrentForm()) return;
+                          setShowCategoryForm(false);
+                          setEditingCategory(null);
+                          setEditor(null);
+                          setPageSuccess("");
+                          setPendingCategoryDelete(null);
+                          if (categorySkills.length > 0) {
+                            setPageError(
+                              `Cannot delete "${category.name}" because it contains ${categorySkills.length} ${categorySkills.length === 1 ? "skill" : "skills"}. Remove or reassign them first.`,
+                            );
+                            return;
+                          }
+                          setPageError("");
+                          setPendingCategoryDelete(category.id);
+                        }}
+                        size="small"
+                        variant="subtle"
+                      >
+                        <Trash2 aria-hidden="true" size={15} />
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
                 </header>
 
                 {categorySkills.length === 0 ? (
-                  <p className="skill-management__category-empty">No skills in this category yet.</p>
+                  <p className="skill-management__category-empty">No skills in this category yet</p>
                 ) : (
                   <ul className="skill-management__list">
                     {categorySkills.map((skill) => (
@@ -335,8 +468,10 @@ export function SkillsManager({
                           <Button
                             disabled={Boolean(updatingId || deletingId)}
                             onClick={() => {
+                              if (!canDismissCurrentForm()) return;
                               setEditor({ skill });
                               setShowCategoryForm(false);
+                              setEditingCategory(null);
                             }}
                             size="small"
                             variant="subtle"
@@ -384,6 +519,33 @@ export function SkillsManager({
                     ))}
                   </ul>
                 )}
+
+                {pendingCategoryDelete === category.id ? (
+                  <div
+                    className="skill-management__delete-confirm"
+                    role="group"
+                    aria-label={`Confirm deletion of ${category.name}`}
+                  >
+                    <p>Delete {category.name}? Only empty categories can be deleted.</p>
+                    <div>
+                      <Button
+                        disabled={deletingCategoryId === category.id}
+                        onClick={() => void deleteCategory(category)}
+                        size="small"
+                      >
+                        {deletingCategoryId === category.id ? "Deleting…" : "Confirm delete"}
+                      </Button>
+                      <Button
+                        disabled={deletingCategoryId === category.id}
+                        onClick={() => setPendingCategoryDelete(null)}
+                        size="small"
+                        variant="subtle"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </section>
             );
           })}
@@ -398,18 +560,24 @@ function SkillEditor({
   initialSkill,
   skills,
   onCancel,
+  onDirtyChange,
   onSaved,
 }: {
   categories: SkillCategoryItem[];
   initialSkill: SkillItem | null;
   skills: SkillItem[];
   onCancel: () => void;
+  onDirtyChange: (isDirty: boolean) => void;
   onSaved: (skill: SkillItem) => void;
 }) {
-  const [values, setValues] = useState(() => toSkillFormValues(initialSkill, categories, skills));
+  const [initialValues] = useState(() => toSkillFormValues(initialSkill, categories, skills));
+  const [values, setValues] = useState(initialValues);
+  const isDirty = hasUnsavedChanges(initialValues, values);
   const [errors, setErrors] = useState<SkillFieldErrors>({});
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => onDirtyChange(isDirty), [isDirty, onDirtyChange]);
 
   function updateField(field: SkillField, value: string) {
     setValues((current) => ({ ...current, [field]: value }));
@@ -623,18 +791,30 @@ function SkillEditor({
 }
 
 function CategoryForm({
+  initialCategory,
   onCancel,
-  onCreated,
+  onDirtyChange,
+  onSaved,
 }: {
+  initialCategory: SkillCategoryItem | null;
   onCancel: () => void;
-  onCreated: (category: SkillCategoryItem) => void;
+  onDirtyChange: (isDirty: boolean) => void;
+  onSaved: (category: SkillCategoryItem) => void;
 }) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
+  const [initialValues] = useState({
+    name: initialCategory?.name ?? "",
+    description: initialCategory?.description ?? "",
+  });
+  const [name, setName] = useState(initialValues.name);
+  const [description, setDescription] = useState(initialValues.description);
+  const isDirty = hasUnsavedChanges(initialValues, { name, description });
   const [nameError, setNameError] = useState("");
   const [descriptionError, setDescriptionError] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const isEditing = initialCategory !== null;
+
+  useEffect(() => onDirtyChange(isDirty), [isDirty, onDirtyChange]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -649,20 +829,37 @@ function CategoryForm({
     setErrorMessage("");
 
     try {
-      const response = await fetch("/api/admin/skills/categories", {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description }),
-      });
+      const response = await fetch(
+        initialCategory
+          ? `/api/admin/skills/categories/${initialCategory.id}`
+          : "/api/admin/skills/categories",
+        {
+          method: initialCategory ? "PATCH" : "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description }),
+        },
+      );
       const result: unknown = await response.json().catch(() => null);
 
       if (!response.ok) {
+        if (result === null) {
+          logCategorySaveDiagnostic({
+            phase: "non-json-response",
+            status: response.status,
+            contentType: response.headers.get("content-type"),
+          });
+        }
         const fields = responseFields(result);
         setNameError(fields.name ?? "");
         setDescriptionError(fields.description ?? "");
-        setErrorMessage(responseError(result, "Unable to create the category. Please try again."));
+        setErrorMessage(
+          responseError(
+            result,
+            `Unable to ${isEditing ? "update" : "create"} the category (HTTP ${response.status}). Please try again.`,
+          ),
+        );
         return;
       }
 
@@ -673,12 +870,23 @@ function CategoryForm({
         typeof result.category !== "object" ||
         result.category === null
       ) {
-        setErrorMessage("The category was created, but its details could not be loaded.");
+        logCategorySaveDiagnostic({
+          phase: "invalid-success-response",
+          status: response.status,
+          contentType: response.headers.get("content-type"),
+        });
+        setErrorMessage("The category was saved, but its details could not be loaded.");
         return;
       }
-      onCreated(result.category as SkillCategoryItem);
-    } catch {
-      setErrorMessage("Unable to create the category. Please try again.");
+      onSaved(result.category as SkillCategoryItem);
+    } catch (error) {
+      logCategorySaveDiagnostic({
+        phase: "network",
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+      setErrorMessage(
+        `Unable to ${isEditing ? "update" : "create"} the category. Please try again.`,
+      );
     } finally {
       setIsSaving(false);
     }
@@ -689,7 +897,7 @@ function CategoryForm({
       <div className="skill-management__editor-heading">
         <div>
           <p className="eyebrow">Skill category</p>
-          <h3>Add a category</h3>
+          <h3>{isEditing ? "Edit category" : "Add a category"}</h3>
         </div>
         <Button aria-label="Close category form" disabled={isSaving} onClick={onCancel} variant="subtle">
           <X aria-hidden="true" size={17} />
@@ -737,9 +945,9 @@ function CategoryForm({
             {isSaving ? (
               <LoaderCircle aria-hidden="true" className="skill-management__spinner" size={17} />
             ) : (
-              <FolderPlus aria-hidden="true" size={17} />
+              isEditing ? <Save aria-hidden="true" size={17} /> : <FolderPlus aria-hidden="true" size={17} />
             )}
-            {isSaving ? "Saving…" : "Save category"}
+            {isSaving ? "Saving…" : isEditing ? "Save changes" : "Save category"}
           </Button>
         </div>
       </form>

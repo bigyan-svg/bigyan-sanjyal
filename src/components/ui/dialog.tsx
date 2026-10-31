@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useDismissableLayer } from "@/hooks/use-dismissable-layer";
 
 interface DialogProps {
   open: boolean;
@@ -19,8 +20,15 @@ export function Dialog({
   children,
 }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const descriptionId = useId();
+
+  useDismissableLayer({
+    enabled: open,
+    insideRefs: [panelRef],
+    onOutsideClick: onClose,
+  });
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -35,23 +43,19 @@ export function Dialog({
     onClose();
   }
 
-  function handleDialogClick(event: React.MouseEvent<HTMLDialogElement>) {
-    if (event.target === dialogRef.current) onClose();
-  }
-
   return (
     <dialog
       ref={dialogRef}
       className="dialog"
+      aria-modal="true"
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
       onCancel={handleCancel}
-      onClick={handleDialogClick}
       onClose={() => {
         if (open) onClose();
       }}
     >
-      <div className="dialog__panel">
+      <div className="dialog__panel" ref={panelRef}>
         <div className="dialog__heading">
           <div>
             <h2 id={titleId}>{title}</h2>

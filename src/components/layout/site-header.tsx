@@ -4,6 +4,7 @@ import { Menu, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { useDismissableLayer } from "@/hooks/use-dismissable-layer";
 
 const navigationItems = [
   { label: "Home", href: "/" },
@@ -24,34 +25,38 @@ export function SiteHeader({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const menuPanelRef = useRef<HTMLElement>(null);
   const pathname = usePathname();
+
+  useDismissableLayer({
+    enabled: menuOpen,
+    insideRefs: [menuButtonRef, menuPanelRef],
+    onOutsideClick: closeMenu,
+    onEscape: closeMenuAndRestoreFocus,
+  });
 
   useEffect(() => {
     if (!menuOpen) return;
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setMenuOpen(false);
-        menuButtonRef.current?.focus();
-      }
-    }
 
     const desktopBreakpoint = window.matchMedia("(min-width: 64rem)");
     function closeOnDesktop() {
       if (desktopBreakpoint.matches) setMenuOpen(false);
     }
 
-    window.addEventListener("keydown", handleKeyDown);
     desktopBreakpoint.addEventListener("change", closeOnDesktop);
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
       desktopBreakpoint.removeEventListener("change", closeOnDesktop);
     };
   }, [menuOpen]);
 
   function closeMenu() {
     setMenuOpen(false);
+  }
+
+  function closeMenuAndRestoreFocus() {
+    setMenuOpen(false);
+    menuButtonRef.current?.focus();
   }
 
   return (
@@ -107,6 +112,7 @@ export function SiteHeader({
                 data-open={menuOpen}
                 id="mobile-navigation"
                 inert={!menuOpen}
+                ref={menuPanelRef}
               >
                 <div className="primary-nav__links">
                   {navigationItems.map((item) => (

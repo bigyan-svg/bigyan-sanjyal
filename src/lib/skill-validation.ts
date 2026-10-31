@@ -2,6 +2,7 @@ import type { ContentStatus } from "@/generated/prisma/client";
 import { isSkillIconName } from "@/lib/skill-icons";
 
 export const SKILL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+export const SKILL_CATEGORY_ID_PATTERN = SKILL_ID_PATTERN;
 
 export type SkillField =
   | "name"
@@ -226,6 +227,12 @@ export function parseCreateSkillCategory(
   }
 
   return { data: { name, description }, errors };
+}
+
+export function parseUpdateSkillCategory(
+  body: unknown,
+): ParsedInput<CategoryInputData> {
+  return parseCreateSkillCategory(body);
 }
 
 export function createCategorySlug(name: string): string | null {
