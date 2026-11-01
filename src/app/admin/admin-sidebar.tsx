@@ -26,7 +26,7 @@ const navigationItems: {
   { label: "Blog Posts", icon: FileText, href: "/admin/blog" },
   { label: "Education", icon: GraduationCap },
   { label: "Work Experience", icon: BriefcaseBusiness },
-  { label: "Messages", icon: Mail },
+  { label: "Messages", icon: Mail, href: "/admin/messages" },
   { label: "Settings", icon: Settings },
 ];
 

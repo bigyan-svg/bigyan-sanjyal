@@ -1090,6 +1090,30 @@ svg {
   line-height: 1.6;
 }
 
+.contact-form__feedback--success {
+  border-color: rgb(62 196 154 / 34%);
+  background: rgb(12 48 47 / 62%);
+  color: #a7f3d0;
+}
+
+.contact-form__feedback--success strong {
+  color: #d1fae5;
+}
+
+.contact-form__feedback--server-error,
+.contact-form__feedback--rate-limited,
+.contact-form__feedback--validation-error {
+  border-color: rgb(245 158 11 / 34%);
+  background: rgb(62 42 17 / 55%);
+  color: #fcd99a;
+}
+
+.contact-form__feedback--server-error strong,
+.contact-form__feedback--rate-limited strong,
+.contact-form__feedback--validation-error strong {
+  color: #ffedc7;
+}
+
 .contact-form fieldset {
   display: grid;
   gap: 1rem;
@@ -1239,16 +1263,24 @@ svg {
 }
 
 .dialog {
-  width: min(34rem, calc(100% - 2rem));
-  max-width: none;
-  max-height: min(85vh, 48rem);
+  width: min(52rem, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  max-height: 85vh;
+  max-height: 85dvh;
   padding: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--color-border-bright);
   border-radius: var(--radius-large);
   background: transparent;
   color: var(--color-text);
   box-shadow: 0 2rem 6rem rgb(0 0 0 / 48%);
+}
+
+.dialog:modal {
+  position: fixed;
+  inset: 0;
+  margin: auto;
 }
 
 .dialog::backdrop {
@@ -1257,6 +1289,7 @@ svg {
 }
 
 .dialog__panel {
+  min-width: 0;
   padding: clamp(1.25rem, 4vw, 2rem);
   background:
     radial-gradient(ellipse at 10% 0%, rgb(48 126 239 / 12%), transparent 56%),
@@ -1264,10 +1297,19 @@ svg {
 }
 
 .dialog__heading {
+  position: sticky;
+  z-index: 2;
+  top: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+  background: #111e36;
+}
+
+.dialog__heading > div {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .dialog__heading h2 {
@@ -1275,6 +1317,7 @@ svg {
   font-size: 1.4rem;
   font-weight: 620;
   letter-spacing: -0.035em;
+  overflow-wrap: anywhere;
 }
 
 .dialog__description {
@@ -1284,7 +1327,10 @@ svg {
 }
 
 .dialog__content {
+  min-width: 0;
+  max-width: 100%;
   margin-top: 1.5rem;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 64rem) {
@@ -3381,6 +3427,371 @@ dialog.project-lightbox::backdrop {
   }
 }
 
+.messages-inbox {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.messages-inbox__overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.messages-inbox__count-card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 1rem 1.1rem;
+}
+
+.messages-inbox__count-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 2.45rem;
+  height: 2.45rem;
+  place-items: center;
+  border: 1px solid rgb(78 205 255 / 28%);
+  border-radius: 0.8rem;
+  color: #a9efff;
+  background: rgb(16 57 88 / 50%);
+}
+
+.messages-inbox__count-card .eyebrow {
+  margin: 0 0 0.25rem;
+}
+
+.messages-inbox__count-card strong {
+  color: #f2f7ff;
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.messages-inbox__panel {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: clamp(1rem, 2.5vw, 1.5rem);
+}
+
+.messages-inbox__toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid rgb(119 163 225 / 15%);
+}
+
+.messages-inbox__filter {
+  display: grid;
+  gap: 0.45rem;
+  min-width: min(100%, 19rem);
+}
+
+.messages-inbox__filter-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.messages-inbox__filter-controls select {
+  min-width: 11rem;
+  flex: 1 1 11rem;
+}
+
+.messages-inbox__sort-note,
+.messages-inbox__date {
+  margin: 0;
+  color: #9eb0cb;
+  font-size: 0.75rem;
+}
+
+.messages-inbox__list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.messages-inbox__item {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid rgb(119 163 225 / 16%);
+  border-radius: var(--radius-small);
+  background: rgb(7 17 33 / 64%);
+}
+
+.messages-inbox__item--new {
+  border-color: rgb(78 205 255 / 39%);
+  background: linear-gradient(120deg, rgb(14 43 68 / 74%), rgb(7 17 33 / 70%));
+  box-shadow: inset 3px 0 0 #4ec5ed;
+}
+
+.messages-inbox__item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.messages-inbox__item-heading h2 {
+  margin: 0;
+  color: #f0f5ff;
+  font-size: 0.96rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.messages-inbox__item-heading p,
+.messages-inbox__subject {
+  margin: 0.22rem 0 0;
+  color: #aebed6;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.messages-inbox__subject {
+  margin-top: 0.15rem;
+  color: #dbe7f8;
+  font-weight: 580;
+}
+
+.messages-inbox__status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.23rem 0.53rem;
+  border: 1px solid rgb(118 160 216 / 30%);
+  border-radius: var(--radius-pill);
+  color: #afc2dd;
+  background: rgb(42 66 101 / 38%);
+  font-size: 0.67rem;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.messages-inbox__status--new {
+  border-color: rgb(78 205 255 / 50%);
+  color: #a9efff;
+  background: rgb(13 69 99 / 52%);
+}
+
+.messages-inbox__status--read {
+  border-color: rgb(118 160 216 / 30%);
+  color: #c4d4ec;
+}
+
+.messages-inbox__status--archived {
+  border-color: rgb(245 188 108 / 36%);
+  color: #f2c98d;
+  background: rgb(105 69 22 / 32%);
+}
+
+.messages-inbox__status--spam {
+  border-color: rgb(248 128 128 / 34%);
+  color: #ffb4b4;
+  background: rgb(96 35 44 / 34%);
+}
+
+.messages-inbox__item-actions,
+.messages-inbox__actions,
+.messages-inbox__confirm-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.messages-inbox__actions,
+.messages-inbox__confirm {
+  position: sticky;
+  z-index: 1;
+  bottom: 0;
+  background: #091326;
+}
+
+.messages-inbox__actions {
+  padding: 0.75rem 0 0.1rem;
+}
+
+.messages-inbox__item-actions {
+  justify-content: flex-end;
+  padding-top: 0.2rem;
+}
+
+.messages-inbox__empty,
+.messages-inbox__loading {
+  display: grid;
+  justify-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: clamp(1.5rem, 5vw, 3rem) 1rem;
+  color: #a8bbd6;
+  text-align: center;
+}
+
+.messages-inbox__empty > svg {
+  color: #83dcf5;
+}
+
+.messages-inbox__empty h2 {
+  margin: 0.2rem 0 0;
+  color: #edf4ff;
+  font-size: 1rem;
+}
+
+.messages-inbox__empty p {
+  max-width: 32rem;
+  margin: 0;
+  color: #a8bbd6;
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+
+.messages-inbox__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgb(119 163 225 / 15%);
+}
+
+.messages-inbox__pagination span {
+  color: #b7c8df;
+  font-size: 0.77rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.messages-inbox__pagination [aria-disabled="true"] {
+  opacity: 0.46;
+  pointer-events: none;
+}
+
+.messages-inbox__feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgb(115 173 237 / 24%);
+  border-radius: 0.8rem;
+  color: #c4d4ec;
+  background: rgb(14 34 61 / 64%);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.messages-inbox__feedback--success {
+  border-color: rgb(62 196 154 / 34%);
+  color: #a7f3d0;
+  background: rgb(12 48 47 / 62%);
+}
+
+.messages-inbox__feedback--error {
+  border-color: rgb(248 128 128 / 34%);
+  color: #ffc2c2;
+  background: rgb(70 27 35 / 56%);
+}
+
+.messages-inbox__detail {
+  display: grid;
+  gap: 1.1rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.messages-inbox__metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.messages-inbox__metadata > div {
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgb(119 163 225 / 14%);
+  border-radius: 0.7rem;
+  background: rgb(7 17 33 / 55%);
+}
+
+.messages-inbox__metadata dt {
+  margin-bottom: 0.25rem;
+  color: #91a8c7;
+  font-size: 0.68rem;
+}
+
+.messages-inbox__metadata dd {
+  margin: 0;
+  color: #e0e9f7;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.messages-inbox__body-section h3 {
+  margin: 0 0 0.55rem;
+  color: #f0f5ff;
+  font-size: 0.88rem;
+}
+
+.messages-inbox__body {
+  max-width: 100%;
+  margin: 0;
+  padding: 0.9rem;
+  border: 1px solid rgb(119 163 225 / 16%);
+  border-radius: 0.75rem;
+  color: #d5e1f2;
+  background: rgb(5 12 24 / 76%);
+  font-size: 0.84rem;
+  line-height: 1.75;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.messages-inbox__confirm {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border: 1px solid rgb(245 188 108 / 30%);
+  border-radius: 0.8rem;
+  background: rgb(61 43 20 / 46%);
+}
+
+.messages-inbox__confirm strong {
+  color: #ffebc7;
+  font-size: 0.83rem;
+}
+
+.messages-inbox__confirm p,
+.messages-inbox__detail-error p {
+  margin: 0.3rem 0 0;
+  color: #d2c1a3;
+  font-size: 0.77rem;
+  line-height: 1.6;
+}
+
+.messages-inbox__confirm-actions {
+  justify-content: flex-end;
+}
+
+.messages-inbox__detail-error {
+  display: grid;
+  gap: 0.7rem;
+}
+
 .profile-management__card {
   display: grid;
   gap: 1.6rem;
@@ -4216,6 +4627,44 @@ dialog.project-lightbox::backdrop {
 
   .skill-management__delete-confirm .button {
     flex: 1 1 0;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 48rem) {
+  .messages-inbox__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .messages-inbox__filter {
+    min-width: 0;
+  }
+
+  .messages-inbox__filter-controls .button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .messages-inbox__detail {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 34rem) {
+  .messages-inbox__overview,
+  .messages-inbox__metadata {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .messages-inbox__item-actions,
+  .messages-inbox__confirm-actions {
+    width: 100%;
+  }
+
+  .messages-inbox__item-actions .button,
+  .messages-inbox__confirm-actions .button {
+    flex: 1 1 auto;
     justify-content: center;
   }
 }

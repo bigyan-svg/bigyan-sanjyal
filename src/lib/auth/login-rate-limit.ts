@@ -8,11 +8,13 @@ import { Redis } from "@upstash/redis";
 const RATE_LIMIT_TIMEOUT_MS = 1_000;
 const RATE_LIMIT_HMAC_SECRET_MIN_BYTES = 32;
 
-type LoginLimiters = {
+type RequestLimiters = {
   ipFifteenMinutes: Ratelimit;
   ipOneHour: Ratelimit;
   emailIpFifteenMinutes: Ratelimit;
   adminIpPasswordChangeFifteenMinutes: Ratelimit;
+  contactIpFifteenMinutes: Ratelimit;
+  contactIpOneHour: Ratelimit;
   hmacSecret: string;
 };
 
@@ -21,7 +23,12 @@ export type AdminLoginRateLimitResult =
   | { status: "limited"; retryAfterSeconds: number }
   | { status: "unavailable" };
 
-let cachedLimiters: LoginLimiters | undefined;
+export type ContactRateLimitResult =
+  | { status: "allowed" }
+  | { status: "limited"; retryAfterSeconds: number }
+  | { status: "unavailable" };
+
+let cachedLimiters: RequestLimiters | undefined;
 
 function getTrustedClientIp(request: Request): string | null {
   if (process.env.VERCEL === "1") {
@@ -45,7 +52,7 @@ function getTrustedClientIp(request: Request): string | null {
   return null;
 }
 
-function createLimiters(): LoginLimiters | null {
+function createLimiters(): RequestLimiters | null {
   const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
   const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
   const hmacSecret = process.env.ADMIN_RATE_LIMIT_HMAC_SECRET;
@@ -111,10 +118,24 @@ function createLimiters(): LoginLimiters | null {
       analytics: false,
       timeout: RATE_LIMIT_TIMEOUT_MS,
     }),
+    contactIpFifteenMinutes: new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(5, "15 m"),
+      prefix: "contact-submit:ip:15m",
+      analytics: false,
+      timeout: RATE_LIMIT_TIMEOUT_MS,
+    }),
+    contactIpOneHour: new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(20, "1 h"),
+      prefix: "contact-submit:ip:1h",
+      analytics: false,
+      timeout: RATE_LIMIT_TIMEOUT_MS,
+    }),
   };
 }
 
-function getLimiters(): LoginLimiters | null {
+function getLimiters(): RequestLimiters | null {
   if (cachedLimiters) {
     return cachedLimiters;
   }
@@ -232,6 +253,51 @@ export async function checkAdminPasswordChangeRateLimit(
     return {
       status: "limited",
       retryAfterSeconds: Math.max(1, Math.ceil((result.reset - Date.now()) / 1_000)),
+    };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+export async function checkContactSubmissionRateLimit(
+  request: Request,
+): Promise<ContactRateLimitResult> {
+  const clientIp = getTrustedClientIp(request);
+
+  if (!clientIp) {
+    return { status: "unavailable" };
+  }
+
+  try {
+    const limiters = getLimiters();
+
+    if (!limiters) {
+      return { status: "unavailable" };
+    }
+
+    const identifier = pseudonymousIdentifier(
+      limiters.hmacSecret,
+      "contact-ip",
+      clientIp,
+    );
+    const results = await Promise.all([
+      limiters.contactIpFifteenMinutes.limit(identifier),
+      limiters.contactIpOneHour.limit(identifier),
+    ]);
+
+    if (results.some((result) => result.reason === "timeout")) {
+      return { status: "unavailable" };
+    }
+
+    const blockedResults = results.filter((result) => !result.success);
+    if (blockedResults.length === 0) {
+      return { status: "allowed" };
+    }
+
+    const nextAllowedAt = Math.max(...blockedResults.map((result) => result.reset));
+    return {
+      status: "limited",
+      retryAfterSeconds: Math.max(1, Math.ceil((nextAllowedAt - Date.now()) / 1_000)),
     };
   } catch {
     return { status: "unavailable" };

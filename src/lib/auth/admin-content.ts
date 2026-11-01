@@ -3,14 +3,27 @@ import "server-only";
 import { cookies } from "next/headers";
 import { hasTrustedRequestOrigin } from "@/lib/auth/origin";
 import { validateAdminSession } from "@/lib/auth/session";
+import {
+  adminContentResponse,
+  authorizeAdminContentReadRequest,
+  authorizeAdminContentSessionToken,
+} from "./admin-content-session";
+
+export { adminContentResponse } from "./admin-content-session";
 
 const ADMIN_SESSION_COOKIE_NAME = "admin_session";
 
-export function adminContentResponse(body: unknown, status: number): Response {
-  return Response.json(body, {
-    status,
-    headers: { "Cache-Control": "no-store" },
-  });
+async function authorizeAdminContentCookieSession(): Promise<Response | null> {
+  try {
+    const token = (await cookies()).get(ADMIN_SESSION_COOKIE_NAME)?.value;
+    return authorizeAdminContentSessionToken(token, validateAdminSession);
+  } catch {
+    return adminContentResponse({ error: "Unable to authorize this request." }, 500);
+  }
+}
+
+export function authorizeAdminContentRead(request: Request): Promise<Response | null> {
+  return authorizeAdminContentReadRequest(request, validateAdminSession);
 }
 
 export async function authorizeAdminContentWrite(
@@ -29,20 +42,5 @@ export async function authorizeAdminContentWrite(
     return adminContentResponse({ error: "Content-Type must be application/json." }, 415);
   }
 
-  try {
-    const token = (await cookies()).get(ADMIN_SESSION_COOKIE_NAME)?.value;
-    const session = token ? await validateAdminSession(token) : null;
-
-    if (!session) {
-      return adminContentResponse({ error: "Authentication is required." }, 401);
-    }
-
-    if (session.user.role !== "ADMIN" && session.user.role !== "EDITOR") {
-      return adminContentResponse({ error: "You are not authorized to manage site content." }, 403);
-    }
-
-    return null;
-  } catch {
-    return adminContentResponse({ error: "Unable to authorize this request." }, 500);
-  }
+  return authorizeAdminContentCookieSession();
 }
