@@ -23,7 +23,7 @@ const navigationItems: {
   { label: "Profile", icon: UserRound, href: "/admin/profile" },
   { label: "Skills", icon: Wrench, href: "/admin/skills" },
   { label: "Projects", icon: FolderKanban, href: "/admin/projects" },
-  { label: "Blog Posts", icon: FileText },
+  { label: "Blog Posts", icon: FileText, href: "/admin/blog" },
   { label: "Education", icon: GraduationCap },
   { label: "Work Experience", icon: BriefcaseBusiness },
   { label: "Messages", icon: Mail },

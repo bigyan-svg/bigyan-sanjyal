@@ -38,7 +38,7 @@ export async function authorizeAdminContentWrite(
     }
 
     if (session.user.role !== "ADMIN" && session.user.role !== "EDITOR") {
-      return adminContentResponse({ error: "You are not authorized to manage skills." }, 403);
+      return adminContentResponse({ error: "You are not authorized to manage site content." }, 403);
     }
 
     return null;
