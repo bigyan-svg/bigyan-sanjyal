@@ -25,7 +25,7 @@ const navigationItems: {
   { label: "Projects", icon: FolderKanban, href: "/admin/projects" },
   { label: "Blog Posts", icon: FileText, href: "/admin/blog" },
   { label: "Education", icon: GraduationCap },
-  { label: "Work Experience", icon: BriefcaseBusiness },
+  { label: "Work Experience", icon: BriefcaseBusiness, href: "/admin/experience" },
   { label: "Messages", icon: Mail, href: "/admin/messages" },
   { label: "Settings", icon: Settings },
 ];
