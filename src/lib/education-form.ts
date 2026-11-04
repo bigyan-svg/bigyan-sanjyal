@@ -3,6 +3,7 @@ import {
   parseCreateEducation,
   type EducationField,
 } from "./education-validation";
+import { expectedVersionEntityTag, MAX_DATABASE_INT } from "./optimistic-version";
 
 export interface EducationFormValues {
   institution: string;
@@ -18,6 +19,7 @@ export interface EducationFormValues {
 
 export interface AdminEducationItem {
   id: string;
+  version: number;
   institution: string;
   program: string;
   fieldOfStudy: string | null;
@@ -54,7 +56,49 @@ export type EducationRequestResult<T = undefined> =
       fields?: EducationFormFieldErrors;
       unauthorized?: boolean;
       cancelled?: boolean;
+      outcome?: "definite" | "unknown";
     };
+
+export function educationSaveSuccessMessage(
+  result: EducationRequestResult<AdminEducationItem>,
+  operation: "create" | "update",
+): string {
+  if (!result.ok) return "";
+  return operation === "create"
+    ? "Education created successfully."
+    : "Education updated successfully.";
+}
+
+type SuccessfulEducationSave = Extract<
+  EducationRequestResult<AdminEducationItem>,
+  { ok: true }
+>;
+type FailedEducationSave = Extract<
+  EducationRequestResult<AdminEducationItem>,
+  { ok: false }
+>;
+
+export function educationSaveEditorTransition<TEditor>(
+  currentEditor: TEditor,
+  result: SuccessfulEducationSave,
+  operation: "create" | "update",
+): { editor: null; successMessage: string };
+export function educationSaveEditorTransition<TEditor>(
+  currentEditor: TEditor,
+  result: FailedEducationSave,
+  operation: "create" | "update",
+): { editor: TEditor; successMessage: "" };
+export function educationSaveEditorTransition<TEditor>(
+  currentEditor: TEditor,
+  result: EducationRequestResult<AdminEducationItem>,
+  operation: "create" | "update",
+): { editor: TEditor | null; successMessage: string } {
+  if (!result.ok) return { editor: currentEditor, successMessage: "" };
+  return {
+    editor: null,
+    successMessage: educationSaveSuccessMessage(result, operation),
+  };
+}
 
 const FIELD_NAMES = new Set<EducationField>([
   "institution",
@@ -152,11 +196,28 @@ async function readJson(response: Response): Promise<unknown> {
   return response.json().catch(() => null) as Promise<unknown>;
 }
 
+function isDeleteSuccessResponse(value: unknown): value is { success: true } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "success" in value &&
+    value.success === true
+  );
+}
+
+function unconfirmedDeleteResult(): EducationRequestResult<never> {
+  return {
+    ok: false,
+    outcome: "unknown",
+    error: "Unable to confirm whether the Education record was deleted. Reload the list before trying again.",
+  };
+}
+
 function failureFromResponse(
   response: Response,
   body: unknown,
   fallback: string,
-): EducationRequestResult<never> {
+): Extract<EducationRequestResult<never>, { ok: false }> {
   if (response.status === 401) {
     return {
       ok: false,
@@ -201,23 +262,42 @@ export async function saveEducationRecord(
   id: string | null,
   values: EducationFormValues,
   fetcher: typeof fetch = fetch,
-): Promise<EducationRequestResult> {
+  expectedVersion?: number,
+): Promise<EducationRequestResult<AdminEducationItem>> {
   const fields = validateEducationForm(values);
   if (Object.keys(fields).length > 0) {
     return { ok: false, error: "Please correct the highlighted fields.", fields };
   }
+  if (
+    id !== null &&
+    (!Number.isSafeInteger(expectedVersion) || expectedVersion === undefined || expectedVersion < 1 || expectedVersion > MAX_DATABASE_INT)
+  ) {
+    return { ok: false, error: "Reload this record before saving so its current version can be checked." };
+  }
 
   try {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (id !== null) headers.set("If-Match", expectedVersionEntityTag(expectedVersion!));
     const response = await fetcher(id ? `/api/admin/education/${id}` : "/api/admin/education", {
       method: id ? "PATCH" : "POST",
       credentials: "same-origin",
       cache: "no-store",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(educationFormPayload(values)),
     });
     const body = await readJson(response);
     if (!response.ok) return failureFromResponse(response, body, "Unable to save the Education record");
-    return { ok: true, value: undefined };
+    const education = typeof body === "object" && body !== null && "education" in body
+      ? body.education
+      : null;
+    if (
+      typeof education !== "object" || education === null || !("version" in education) ||
+      typeof education.version !== "number" || !Number.isSafeInteger(education.version) ||
+      education.version < 1
+    ) {
+      return { ok: false, error: "The record was saved, but its new version could not be confirmed. Reload before editing again." };
+    }
+    return { ok: true, value: education as AdminEducationItem };
   } catch {
     return {
       ok: false,
@@ -228,27 +308,46 @@ export async function saveEducationRecord(
 
 export async function deleteEducationRecord(
   id: string,
+  expectedVersion: number,
   confirmed: boolean,
   fetcher: typeof fetch = fetch,
 ): Promise<EducationRequestResult> {
   if (!confirmed) {
     return { ok: false, cancelled: true, error: "Deletion was not confirmed." };
   }
+  if (
+    !Number.isSafeInteger(expectedVersion) ||
+    expectedVersion < 1 ||
+    expectedVersion > MAX_DATABASE_INT
+  ) {
+    return { ok: false, error: "Reload this record before deleting so its current version can be checked." };
+  }
 
   try {
+    const headers = new Headers();
+    headers.set("If-Match", expectedVersionEntityTag(expectedVersion));
     const response = await fetcher(`/api/admin/education/${id}`, {
       method: "DELETE",
       credentials: "same-origin",
       cache: "no-store",
+      headers,
     });
     const body = await readJson(response);
-    if (!response.ok) return failureFromResponse(response, body, "Unable to delete the Education record");
-    return { ok: true, value: undefined };
+    if (!response.ok) {
+      if (response.status === 401) {
+        return failureFromResponse(response, body, "Unable to delete the Education record");
+      }
+      if (response.status >= 500) return unconfirmedDeleteResult();
+      return {
+        ...failureFromResponse(response, body, "Unable to delete the Education record"),
+        outcome: "definite",
+      };
+    }
+    return isDeleteSuccessResponse(body)
+      ? { ok: true, value: undefined }
+      : unconfirmedDeleteResult();
   } catch {
-    return {
-      ok: false,
-      error: "Unable to delete the Education record. Check your connection and try again.",
-    };
+    return unconfirmedDeleteResult();
   }
 }
 

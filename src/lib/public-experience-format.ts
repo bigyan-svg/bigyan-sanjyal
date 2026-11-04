@@ -1,7 +1,7 @@
 export interface WorkExperienceDateRangeInput {
   startDate: Date | null;
   endDate: Date | null;
-  isCurrent: boolean;
+  currentPosition: boolean;
 }
 
 const monthYearFormatter = new Intl.DateTimeFormat("en-US", {
@@ -22,7 +22,7 @@ export function formatWorkExperienceDateRange(
   experience: WorkExperienceDateRangeInput,
 ): string {
   const start = formatMonthYear(experience.startDate);
-  const end = experience.isCurrent ? "Present" : formatMonthYear(experience.endDate);
+  const end = experience.currentPosition ? "Present" : formatMonthYear(experience.endDate);
 
   return `${start} – ${end}`;
 }

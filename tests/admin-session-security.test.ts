@@ -3,14 +3,22 @@ import { test } from "node:test";
 import {
   ADMIN_SESSION_ACTIVITY_UPDATE_INTERVAL_MS,
   ADMIN_SESSION_IDLE_TIMEOUT_MS,
+  getAdminSessionLifetimeRejection,
+  isAdminSessionRevoked,
   isAdminSessionCurrentAt,
   shouldUpdateAdminSessionActivity,
 } from "../src/lib/auth/session-policy";
+import { compareSessionPasswordChangeTimestamps } from "../src/lib/auth/session-password-change";
 import { getAdminSessionCookieOptions } from "../src/lib/auth/session-cookie-options";
 import {
   revokeAdminSession,
   type AdminSessionRevocationStore,
 } from "../src/lib/auth/session-revocation";
+import {
+  generateSessionToken,
+  hashSessionToken,
+  isCurrentDevelopmentSessionToken,
+} from "../src/lib/auth/session-token";
 
 const now = Date.parse("2026-01-01T12:00:00.000Z");
 
@@ -38,6 +46,14 @@ test("an idle session expires at 15 minutes", () => {
 
 test("an absolutely expired session remains invalid even with recent activity", () => {
   assert.equal(
+    getAdminSessionLifetimeRejection(
+      new Date(now),
+      new Date(now - 1000),
+      now,
+    ),
+    "absolute-expiry",
+  );
+  assert.equal(
     isAdminSessionCurrentAt(
       new Date(now),
       new Date(now - 1000),
@@ -45,6 +61,50 @@ test("an absolutely expired session remains invalid even with recent activity", 
     ),
     false,
   );
+});
+
+test("sessions created before a password change are rejected at microsecond precision", () => {
+  const comparison = compareSessionPasswordChangeTimestamps(
+    "1796124399999999",
+    "1796124400000000",
+    "2026-12-01T11:26:39.999999Z",
+    "2026-12-01T11:26:40.000000Z",
+  );
+
+  assert.ok(comparison);
+  assert.equal(comparison.isNewer, false);
+  assert.equal(comparison.isEqual, false);
+});
+
+test("sessions created after a password change are accepted at microsecond precision", () => {
+  const comparison = compareSessionPasswordChangeTimestamps(
+    "1796124400000001",
+    "1796124400000000",
+    "2026-12-01T11:26:40.000001Z",
+    "2026-12-01T11:26:40.000000Z",
+  );
+
+  assert.ok(comparison);
+  assert.equal(comparison.isNewer, true);
+  assert.equal(comparison.isEqual, false);
+});
+
+test("equal session and password-change timestamps are rejected deterministically", () => {
+  const comparison = compareSessionPasswordChangeTimestamps(
+    "1796124400000000",
+    "1796124400000000",
+    "2026-12-01T11:26:40.000000Z",
+    "2026-12-01T11:26:40.000000Z",
+  );
+
+  assert.ok(comparison);
+  assert.equal(comparison.isNewer, false);
+  assert.equal(comparison.isEqual, true);
+});
+
+test("revoked sessions remain rejected", () => {
+  assert.equal(isAdminSessionRevoked(new Date(now)), true);
+  assert.equal(isAdminSessionRevoked(null), false);
 });
 
 test("activity writes are skipped inside the update interval", () => {
@@ -104,4 +164,30 @@ test("manual revocation immediately revokes only the selected active session", a
   assert.equal(await revokeAdminSession("current-session", store, revokedAt), 0);
   assert.equal(revokedAtById.get("current-session"), revokedAt);
   assert.equal(revokedAtById.get("other-session"), null);
+});
+
+test("development session tokens hash consistently and become invalid after process-key rotation", () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const mutableEnvironment = process.env as unknown as Record<string, string | undefined>;
+  const globalWithKey = globalThis as typeof globalThis & {
+    __bigyanAdminSessionDevelopmentKey?: Uint8Array;
+  };
+  const previousDevelopmentKey = globalWithKey.__bigyanAdminSessionDevelopmentKey;
+
+  try {
+    mutableEnvironment.NODE_ENV = "development";
+    const token = generateSessionToken();
+    const tokenHash = hashSessionToken(token);
+
+    assert.equal(isCurrentDevelopmentSessionToken(token), true);
+    assert.match(tokenHash, /^[a-f0-9]{64}$/u);
+    assert.notEqual(tokenHash, token);
+
+    globalWithKey.__bigyanAdminSessionDevelopmentKey = new Uint8Array(32).fill(7);
+    assert.equal(isCurrentDevelopmentSessionToken(token), false);
+  } finally {
+    globalWithKey.__bigyanAdminSessionDevelopmentKey = previousDevelopmentKey;
+    if (previousNodeEnv === undefined) delete mutableEnvironment.NODE_ENV;
+    else mutableEnvironment.NODE_ENV = previousNodeEnv;
+  }
 });

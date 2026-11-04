@@ -4,8 +4,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Card } from "@/components/ui/card";
-import { Container } from "@/components/ui/container";
+import { AdminDataLoadError } from "@/components/admin/admin-data-load-error";
 import { prisma } from "@/lib/prisma";
 import { validateAdminSession } from "@/lib/auth/session";
 import type {
@@ -14,7 +13,6 @@ import type {
   AdminProjectSkillOption,
 } from "@/lib/project-types";
 import { adminProjectSelect } from "@/lib/project-content";
-import { AdminSidebar } from "../admin-sidebar";
 import { ProjectsManager } from "./projects-manager";
 
 export const metadata: Metadata = {
@@ -79,53 +77,41 @@ async function AdminProjectsContent() {
   }
 
   return (
-    <section aria-labelledby="projects-management-title" className="admin-dashboard">
-      <Container className="admin-dashboard__container">
-        <div className="admin-dashboard__shell">
-          <AdminSidebar
-            activeHref="/admin/projects"
-            email={session.user.email}
-            role={session.user.role}
-          />
-
-          <div className="admin-dashboard__main">
-            <header className="admin-dashboard__topbar">
-              <div>
-                <p className="eyebrow">Workspace / Projects</p>
-                <h1 id="projects-management-title">Projects management</h1>
-                <p className="admin-dashboard__welcome-detail">
-                  Add confirmed project details and choose when each project is published.
-                </p>
-              </div>
-              <span className="admin-dashboard__session-status">
-                <span aria-hidden="true" className="status-dot" />
-                Signed in
-              </span>
-            </header>
-
-            {loadFailed ? (
-              <Card className="project-management__load-error" variant="outlined" role="alert">
-                <h2>Projects and categories are unavailable</h2>
-                <p>Please try loading this page again. No content was changed.</p>
-              </Card>
-            ) : (
-              <ProjectsManager
-                initialCategories={categories ?? []}
-                initialProjects={projects ?? []}
-                initialSkills={skills ?? []}
-              />
-            )}
-          </div>
+    <>
+      <header className="admin-dashboard__topbar">
+        <div>
+          <p className="eyebrow">Workspace / Projects</p>
+          <h1 id="projects-management-title">Projects management</h1>
+          <p className="admin-dashboard__welcome-detail">
+            Add confirmed project details and choose when each project is published.
+          </p>
         </div>
-      </Container>
-    </section>
+        <span className="admin-dashboard__session-status">
+          <span aria-hidden="true" className="status-dot" />
+          Signed in
+        </span>
+      </header>
+
+      {loadFailed ? (
+        <AdminDataLoadError
+          description="Projects, categories, or skills could not be loaded. No content was changed. Try again to reload the management data."
+          title="Projects and categories are unavailable"
+        />
+      ) : (
+        <ProjectsManager
+          initialCategories={categories ?? []}
+          initialProjects={projects ?? []}
+          initialSkills={skills ?? []}
+        />
+      )}
+    </>
   );
 }
 
 function ProjectsPageLoading() {
   return (
-    <section aria-busy="true" className="admin-dashboard__loading-page">
+    <div aria-busy="true" className="admin-dashboard__loading-page">
       <p className="eyebrow" role="status">Loading projects management…</p>
-    </section>
+    </div>
   );
 }

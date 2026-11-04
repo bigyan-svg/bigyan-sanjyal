@@ -48,7 +48,7 @@ const BLOG_POST_FIELDS = new Set<BlogPostField>([
   "status",
 ]);
 const BLOG_POST_STATUSES = new Set<BlogPostStatus>(["DRAFT", "PUBLISHED", "ARCHIVED"]);
-const BLOG_POST_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+export const BLOG_POST_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

@@ -1,4 +1,5 @@
 import type { Prisma } from "@/generated/prisma/client";
+import type { AffectedBlogPostVersion } from "@/lib/blog-types";
 
 export const adminBlogCategorySelect = {
   id: true,
@@ -48,7 +49,7 @@ export function isBlogTaxonomyUniqueConflict(error: unknown): boolean {
 export async function deleteBlogCategoryWithPosts(
   transaction: Prisma.TransactionClient,
   id: string,
-): Promise<{ name: string; detachedPostCount: number } | null> {
+): Promise<{ name: string; detachedPostCount: number; affectedPosts: AffectedBlogPostVersion[] } | null> {
   const locked = await transaction.$queryRaw<Array<{ id: string; name: string }>>`
     SELECT "id", "name"
     FROM "PostCategory"
@@ -58,15 +59,19 @@ export async function deleteBlogCategoryWithPosts(
   const category = locked[0];
   if (!category) return null;
 
-  const detachedPostCount = await transaction.post.count({ where: { categoryId: id } });
+  const affectedPosts = await transaction.post.updateManyAndReturn({
+    where: { categoryId: id },
+    data: { version: { increment: 1 } },
+    select: { id: true, version: true },
+  });
   await transaction.postCategory.delete({ where: { id } });
-  return { name: category.name, detachedPostCount };
+  return { name: category.name, detachedPostCount: affectedPosts.length, affectedPosts };
 }
 
 export async function deleteBlogTagWithAssociations(
   transaction: Prisma.TransactionClient,
   id: string,
-): Promise<{ name: string; removedAssociationCount: number } | null> {
+): Promise<{ name: string; removedAssociationCount: number; affectedPosts: AffectedBlogPostVersion[] } | null> {
   const locked = await transaction.$queryRaw<Array<{ id: string; name: string }>>`
     SELECT "id", "name"
     FROM "Tag"
@@ -77,6 +82,18 @@ export async function deleteBlogTagWithAssociations(
   if (!tag) return null;
 
   const removedAssociationCount = await transaction.postTag.count({ where: { tagId: id } });
+  const associations = await transaction.postTag.findMany({
+    where: { tagId: id },
+    select: { postId: true },
+  });
+  const postIds = [...new Set(associations.map(({ postId }) => postId))];
+  const affectedPosts = postIds.length > 0
+    ? await transaction.post.updateManyAndReturn({
+      where: { id: { in: postIds } },
+      data: { version: { increment: 1 } },
+      select: { id: true, version: true },
+    })
+    : [];
   await transaction.tag.delete({ where: { id } });
-  return { name: tag.name, removedAssociationCount };
+  return { name: tag.name, removedAssociationCount, affectedPosts };
 }

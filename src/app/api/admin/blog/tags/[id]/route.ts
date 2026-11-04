@@ -73,7 +73,11 @@ export async function DELETE(
   try {
     const deleted = await prisma.$transaction((transaction) => deleteBlogTagWithAssociations(transaction, id));
     if (!deleted) return adminContentResponse({ error: "Tag not found." }, 404);
-    return adminContentResponse({ success: true, removedAssociationCount: deleted.removedAssociationCount }, 200);
+    return adminContentResponse({
+      success: true,
+      removedAssociationCount: deleted.removedAssociationCount,
+      affectedPosts: deleted.affectedPosts,
+    }, 200);
   } catch (error) {
     const code = getBlogTaxonomyPrismaErrorCode(error);
     if (code === "P2025") return adminContentResponse({ error: "Tag not found." }, 404);

@@ -14,6 +14,7 @@ export interface AdminProjectCategory extends ProjectCategoryOption {
 
 export interface AdminProjectItem {
   id: string;
+  version: number;
   categoryId: string | null;
   title: string;
   slug: string;

@@ -3,7 +3,7 @@ import "server-only";
 import {
   authorizeAdminContentWrite,
 } from "@/lib/auth/admin-content";
-import { updateWorkExperienceInTransaction } from "@/lib/work-experience-content";
+import { deleteWorkExperienceWithVersion, updateWorkExperienceInTransaction } from "@/lib/work-experience-content";
 import {
   handleWorkExperienceDelete,
   handleWorkExperienceUpdate,
@@ -22,9 +22,9 @@ export async function PATCH(
 
   return handleWorkExperienceUpdate(request, id, {
     authorize: authorizeAdminContentWrite,
-    update: (experienceId, patch, now) =>
+    update: (experienceId, patch, expectedVersion, now) =>
       prisma.$transaction((transaction) =>
-        updateWorkExperienceInTransaction(transaction, experienceId, patch, now),
+        updateWorkExperienceInTransaction(transaction, experienceId, patch, expectedVersion, now),
       ),
   });
 }
@@ -37,11 +37,9 @@ export async function DELETE(
 
   return handleWorkExperienceDelete(request, id, {
     authorize: (incomingRequest) => authorizeAdminContentWrite(incomingRequest, false),
-    delete: async (experienceId) => {
-      const result = await prisma.workExperience.deleteMany({
-        where: { id: experienceId },
-      });
-      return result.count > 0;
-    },
+    delete: (experienceId, expectedVersion) =>
+      prisma.$transaction((transaction) =>
+        deleteWorkExperienceWithVersion(transaction, experienceId, expectedVersion),
+      ),
   });
 }

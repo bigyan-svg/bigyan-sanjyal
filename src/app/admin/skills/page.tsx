@@ -6,11 +6,9 @@ import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/card";
-import { Container } from "@/components/ui/container";
 import { prisma } from "@/lib/prisma";
 import { validateAdminSession } from "@/lib/auth/session";
 import type { SkillCategoryItem, SkillItem } from "@/lib/skill-types";
-import { AdminSidebar } from "../admin-sidebar";
 import { SkillsManager } from "./skills-manager";
 
 export const metadata: Metadata = {
@@ -69,49 +67,37 @@ async function AdminSkillsContent() {
   }
 
   return (
-    <section aria-labelledby="skills-management-title" className="admin-dashboard">
-      <Container className="admin-dashboard__container">
-        <div className="admin-dashboard__shell">
-          <AdminSidebar
-            activeHref="/admin/skills"
-            email={session.user.email}
-            role={session.user.role}
-          />
-
-          <div className="admin-dashboard__main">
-            <header className="admin-dashboard__topbar">
-              <div>
-                <p className="eyebrow">Workspace / Skills</p>
-                <h1 id="skills-management-title">Skills management</h1>
-                <p className="admin-dashboard__welcome-detail">
-                  Add only skills and proficiency details you want to publish.
-                </p>
-              </div>
-              <span className="admin-dashboard__session-status">
-                <span aria-hidden="true" className="status-dot" />
-                Signed in
-              </span>
-            </header>
-
-            {loadFailed ? (
-              <Card className="skill-management__load-error" variant="outlined" role="alert">
-                <h2>Skills are unavailable</h2>
-                <p>Please try loading this page again. No content was changed.</p>
-              </Card>
-            ) : (
-              <SkillsManager initialCategories={categories ?? []} initialSkills={skills ?? []} />
-            )}
-          </div>
+    <>
+      <header className="admin-dashboard__topbar">
+        <div>
+          <p className="eyebrow">Workspace / Skills</p>
+          <h1 id="skills-management-title">Skills management</h1>
+          <p className="admin-dashboard__welcome-detail">
+            Add only skills and proficiency details you want to publish.
+          </p>
         </div>
-      </Container>
-    </section>
+        <span className="admin-dashboard__session-status">
+          <span aria-hidden="true" className="status-dot" />
+          Signed in
+        </span>
+      </header>
+
+      {loadFailed ? (
+        <Card className="skill-management__load-error" variant="outlined" role="alert">
+          <h2>Skills are unavailable</h2>
+          <p>Please try loading this page again. No content was changed.</p>
+        </Card>
+      ) : (
+        <SkillsManager initialCategories={categories ?? []} initialSkills={skills ?? []} />
+      )}
+    </>
   );
 }
 
 function SkillsPageLoading() {
   return (
-    <section aria-busy="true" className="admin-dashboard__loading-page">
+    <div aria-busy="true" className="admin-dashboard__loading-page">
       <p className="eyebrow">Loading skills management…</p>
-    </section>
+    </div>
   );
 }

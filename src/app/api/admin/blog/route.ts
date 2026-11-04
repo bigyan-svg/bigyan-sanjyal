@@ -1,6 +1,6 @@
 import "server-only";
 
-import { adminContentResponse, authorizeAdminContentWrite } from "@/lib/auth/admin-content";
+import { adminContentResponse, authorizeAdminContentRead, authorizeAdminContentWrite } from "@/lib/auth/admin-content";
 import {
   adminBlogPostSelect,
   BlogCategoryMissingError,
@@ -11,11 +11,51 @@ import {
   isDuplicateBlogPostSlugError,
   toAdminBlogPostItem,
 } from "@/lib/blog-content";
+import {
+  adminBlogCategorySelect,
+  adminBlogTagSelect,
+  toAdminBlogCategory,
+  toAdminBlogTag,
+} from "@/lib/blog-taxonomy-content";
 import { resolveBlogPostPublishedAt, parseCreateBlogPost } from "@/lib/blog-validation";
 import { JsonRequestTooLargeError, readJsonRequest } from "@/lib/json-request";
 import { prisma } from "@/lib/prisma";
+import { expectedVersionEntityTag } from "@/lib/optimistic-version";
 
 const BLOG_POST_REQUEST_MAX_BYTES = 1024 * 1024;
+
+export async function GET(request: Request): Promise<Response> {
+  const authorizationError = await authorizeAdminContentRead(request);
+  if (authorizationError) return authorizationError;
+
+  try {
+    const [postRecords, categoryRecords, tagRecords] = await prisma.$transaction(
+      async (transaction) => Promise.all([
+        transaction.post.findMany({
+          orderBy: [{ updatedAt: "desc" }, { title: "asc" }, { id: "asc" }],
+          select: adminBlogPostSelect,
+        }),
+        transaction.postCategory.findMany({
+          orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+          select: adminBlogCategorySelect,
+        }),
+        transaction.tag.findMany({
+          orderBy: [{ name: "asc" }, { id: "asc" }],
+          select: adminBlogTagSelect,
+        }),
+      ]),
+      { isolationLevel: "RepeatableRead" },
+    );
+
+    return adminContentResponse({
+      posts: postRecords.map(toAdminBlogPostItem),
+      categories: categoryRecords.map(toAdminBlogCategory),
+      tags: tagRecords.map(toAdminBlogTag),
+    }, 200);
+  } catch {
+    return adminContentResponse({ error: "Unable to load Blog data." }, 500);
+  }
+}
 
 export async function POST(request: Request): Promise<Response> {
   const authorizationError = await authorizeAdminContentWrite(request);
@@ -72,7 +112,12 @@ export async function POST(request: Request): Promise<Response> {
       });
     });
 
-    return adminContentResponse({ post: toAdminBlogPostItem(post) }, 201);
+    const postItem = toAdminBlogPostItem(post);
+    return adminContentResponse(
+      { post: postItem },
+      201,
+      { ETag: expectedVersionEntityTag(postItem.version) },
+    );
   } catch (error) {
     if (error instanceof BlogCategoryMissingError) {
       return adminContentResponse(

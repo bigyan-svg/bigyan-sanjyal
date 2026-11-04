@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  deleteEducationWithVersion,
   educationOrderBy,
   updateEducationInTransaction,
 } from "../src/lib/education-content";
@@ -48,6 +49,7 @@ function record(overrides: Partial<EducationRecord> = {}): EducationRecord {
   return {
     ...parsed.data,
     id: VALID_ID,
+    version: 1,
     publishedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -59,23 +61,42 @@ function materialize(data: EducationMutationData): EducationRecord {
   return {
     ...data,
     id: VALID_ID,
+    version: 1,
     createdAt: NOW,
     updatedAt: NOW,
   };
 }
 
 function mockEducationTransaction(current: EducationRecord) {
-  let savedData: EducationMutationData | undefined;
+  let savedRecord = current;
+  let savedData: Partial<EducationMutationData> | undefined;
   const transaction = {
     education: {
-      findUnique: async () => current,
-      update: async ({ data }: { data: EducationMutationData }) => {
-        savedData = data;
-        return { ...current, ...data, updatedAt: NOW };
+      findUnique: async ({ select }: { select?: Record<string, boolean> }) =>
+        select && Object.keys(select).length === 1 && select.id
+          ? { id: savedRecord.id }
+          : { ...savedRecord },
+      updateManyAndReturn: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const matches = Object.entries(where).every(([field, expected]) => {
+          const actual = savedRecord[field as keyof EducationRecord];
+          return actual instanceof Date && expected instanceof Date
+            ? actual.getTime() === expected.getTime()
+            : actual === expected;
+        });
+        if (!matches) return [];
+        savedData = data as Partial<EducationMutationData>;
+        const versionUpdate = data.version as { increment?: number } | undefined;
+        savedRecord = {
+          ...savedRecord,
+          ...data,
+          version: savedRecord.version + (versionUpdate?.increment ?? 0),
+          updatedAt: NOW,
+        };
+        return [{ ...savedRecord }];
       },
     },
   } as never;
-  return { transaction, getSavedData: () => savedData };
+  return { transaction, getSavedData: () => savedData, getSavedRecord: () => savedRecord };
 }
 
 function request(
@@ -84,8 +105,10 @@ function request(
   body?: string,
   contentType = "application/json",
   origin = "https://example.test",
+  ifMatch: string | null = method === "PATCH" ? '"1"' : null,
 ): Request {
   const headers = new Headers({ Origin: origin });
+  if (ifMatch !== null) headers.set("If-Match", ifMatch);
   if (body !== undefined) {
     headers.set("Content-Type", contentType);
     headers.set("Content-Length", String(Buffer.byteLength(body)));
@@ -253,14 +276,15 @@ test("PATCH handler preserves omitted optional fields and clears explicitly null
     {
       authorize: allow,
       now: () => NOW,
-      update: (id, patch, now) => updateEducationInTransaction(omittedMock.transaction, id, patch, now),
+      update: (id, patch, expectedVersion, now) => updateEducationInTransaction(omittedMock.transaction, id, patch, expectedVersion, now),
     },
   );
   assert.equal(omitted.status, 200);
-  assert.equal(omittedMock.getSavedData()?.fieldOfStudy, "Example Studies");
-  assert.equal(omittedMock.getSavedData()?.description, "Existing description");
-  assert.equal(omittedMock.getSavedData()?.startDate?.toISOString(), "2022-01-15T00:00:00.000Z");
-  assert.equal(omittedMock.getSavedData()?.endDate?.toISOString(), "2024-06-30T00:00:00.000Z");
+  assert.deepEqual(omittedMock.getSavedData(), { program: "Updated program", version: { increment: 1 } });
+  assert.equal(omittedMock.getSavedRecord().fieldOfStudy, "Example Studies");
+  assert.equal(omittedMock.getSavedRecord().description, "Existing description");
+  assert.equal(omittedMock.getSavedRecord().startDate?.toISOString(), "2022-01-15T00:00:00.000Z");
+  assert.equal(omittedMock.getSavedRecord().endDate?.toISOString(), "2024-06-30T00:00:00.000Z");
 
   const explicitNullMock = mockEducationTransaction(current);
   const cleared = await handleEducationUpdate(
@@ -273,7 +297,7 @@ test("PATCH handler preserves omitted optional fields and clears explicitly null
     {
       authorize: allow,
       now: () => NOW,
-      update: (id, patch, now) => updateEducationInTransaction(explicitNullMock.transaction, id, patch, now),
+      update: (id, patch, expectedVersion, now) => updateEducationInTransaction(explicitNullMock.transaction, id, patch, expectedVersion, now),
     },
   );
   assert.equal(cleared.status, 200);
@@ -295,7 +319,7 @@ test("PATCH normalizes empty optional text and rejects empty date strings", asyn
     VALID_ID,
     {
       authorize: allow,
-      update: (id, patch, now) => updateEducationInTransaction(emptyTextMock.transaction, id, patch, now),
+      update: (id, patch, expectedVersion, now) => updateEducationInTransaction(emptyTextMock.transaction, id, patch, expectedVersion, now),
     },
   );
   assert.equal(emptyText.status, 200);
@@ -319,9 +343,9 @@ test("final merged PATCH state is validated before any database update", async (
   const transaction = {
     education: {
       findUnique: async () => current,
-      update: async () => {
+      updateManyAndReturn: async () => {
         updateCalls += 1;
-        return current;
+        return [];
       },
     },
   } as never;
@@ -330,6 +354,7 @@ test("final merged PATCH state is validated before any database update", async (
     transaction,
     VALID_ID,
     { endDate: new Date("2024-06-30T00:00:00.000Z") },
+    1,
     NOW,
   );
   assert.equal(result.kind, "invalid");
@@ -337,29 +362,156 @@ test("final merged PATCH state is validated before any database update", async (
   assert.equal(updateCalls, 0);
 });
 
-test("transactional update writes merged values and preserves a first publication timestamp", async () => {
+test("transactional update writes only supplied fields and initializes publication once", async () => {
   let savedData: unknown;
   const current = record({ status: "DRAFT", publishedAt: null });
+  const mock = mockEducationTransaction(current);
+  const transaction = mock.transaction as { education: { updateManyAndReturn(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<EducationRecord[]> } };
+  const updateMany = transaction.education.updateManyAndReturn;
+  transaction.education.updateManyAndReturn = async (args) => {
+    savedData = args.data;
+    return updateMany(args);
+  };
+
+  const result = await updateEducationInTransaction(
+    mock.transaction,
+    VALID_ID,
+    { status: "PUBLISHED", program: "Updated program" },
+    1,
+    NOW,
+  );
+  assert.equal(result.kind, "updated");
+  assert.equal((savedData as Record<string, unknown>).program, "Updated program");
+  assert.equal((savedData as Record<string, unknown>).publishedAt, NOW);
+  assert.deepEqual((savedData as Record<string, unknown>).version, { increment: 1 });
+  assert.equal(mock.getSavedRecord().institution, current.institution);
+  assert.equal(mock.getSavedRecord().program, "Updated program");
+});
+
+test("concurrent Education PATCHes conflict instead of overwriting a newer update", async () => {
+  let current = record();
+  let initialReads = 0;
+  let releaseReads: (() => void) | undefined;
+  const bothRead = new Promise<void>((resolve) => { releaseReads = resolve; });
   const transaction = {
     education: {
-      findUnique: async () => current,
-      update: async (args: { data: unknown }) => {
-        savedData = args.data;
-        return materialize(args.data as EducationMutationData);
+      findUnique: async ({ select }: { select: Record<string, boolean> }) => {
+        const snapshot = { ...current };
+        if (initialReads < 2) {
+          initialReads += 1;
+          if (initialReads === 2) releaseReads?.();
+          await bothRead;
+          return snapshot;
+        }
+        return Object.keys(select).length === 1 && select.id
+          ? { id: current.id }
+          : { ...current };
+      },
+      updateManyAndReturn: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const matches = Object.entries(where).every(([field, expected]) => {
+          const actual = current[field as keyof EducationRecord];
+          return actual instanceof Date && expected instanceof Date
+            ? actual.getTime() === expected.getTime()
+            : actual === expected;
+        });
+        if (!matches) return [];
+        const versionUpdate = data.version as { increment?: number } | undefined;
+        current = { ...current, ...data, version: current.version + (versionUpdate?.increment ?? 0), updatedAt: NOW };
+        return [{ ...current }];
       },
     },
   } as never;
 
-  const result = await updateEducationInTransaction(
-    transaction,
+  const [programUpdate, descriptionUpdate] = await Promise.all([
+    updateEducationInTransaction(transaction, VALID_ID, { program: "Concurrent program" }, 1, NOW),
+    updateEducationInTransaction(transaction, VALID_ID, { description: "Concurrent description" }, 1, NOW),
+  ]);
+
+  assert.deepEqual([programUpdate.kind, descriptionUpdate.kind].sort(), ["conflict", "updated"]);
+  if (programUpdate.kind === "updated") {
+    assert.equal(current.program, "Concurrent program");
+    assert.equal(current.description, "A plain text description.");
+  } else {
+    assert.equal(current.program, "Bachelor of Example Studies");
+    assert.equal(current.description, "Concurrent description");
+  }
+});
+
+test("Education PATCH returns a safe no-store conflict response", async () => {
+  const response = await handleEducationUpdate(
+    request(`https://example.test/api/admin/education/${VALID_ID}`, "PATCH", JSON.stringify({ program: "Updated" })),
     VALID_ID,
-    { status: "PUBLISHED", program: "Updated program" },
-    NOW,
+    { authorize: allow, update: async () => ({ kind: "conflict" }) },
   );
-  assert.equal(result.kind, "updated");
-  assert.equal((savedData as EducationMutationData).program, "Updated program");
-  assert.equal((savedData as EducationMutationData).institution, current.institution);
-  assert.equal((savedData as EducationMutationData).publishedAt, NOW);
+  assert.equal(response.status, 409);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), {
+    error: "This record changed since you opened it. Reload the latest version and reconcile your edits before saving again.",
+  });
+});
+
+test("Education PATCH requires a valid If-Match version and distinguishes missing records", async () => {
+  let updateCalls = 0;
+  for (const token of [null, "1", '"0"', '"1.5"', 'W/"1"', '"2147483648"']) {
+    const response = await handleEducationUpdate(
+      request(`https://example.test/api/admin/education/${VALID_ID}`, "PATCH", JSON.stringify({ program: "Updated" }), "application/json", "https://example.test", token),
+      VALID_ID,
+      { authorize: allow, update: async () => { updateCalls += 1; return { kind: "missing" }; } },
+    );
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  assert.equal(updateCalls, 0);
+
+  const missing = await handleEducationUpdate(
+    request("https://example.test/api/admin/education/22222222-2222-4222-8222-222222222222", "PATCH", JSON.stringify({ program: "Updated" })),
+    "22222222-2222-4222-8222-222222222222",
+    { authorize: allow, update: async () => ({ kind: "missing" }) },
+  );
+  assert.equal(missing.status, 404);
+});
+
+test("Education version token rejects stale reverted writes and accepts sequential current versions", async () => {
+  const mock = mockEducationTransaction(record());
+  const patch = (expectedVersion: number, program: string) => handleEducationUpdate(
+    request(`https://example.test/api/admin/education/${VALID_ID}`, "PATCH", JSON.stringify({ program }), "application/json", "https://example.test", `"${expectedVersion}"`),
+    VALID_ID,
+    {
+      authorize: allow,
+      update: (id, fields, version, now) => updateEducationInTransaction(mock.transaction, id, fields, version, now),
+      now: () => NOW,
+    },
+  );
+
+  const first = await patch(1, "Client A update");
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).education.version, 2);
+  const stale = await patch(1, "Client B stale update");
+  assert.equal(stale.status, 409);
+  assert.equal(mock.getSavedRecord().program, "Client A update");
+  assert.equal(mock.getSavedRecord().version, 2);
+
+  const next = await patch(2, "Client A reconciled update");
+  assert.equal(next.status, 200);
+  assert.equal((await next.json()).education.version, 3);
+
+  const revertedMock = mockEducationTransaction(record({ program: "Original" }));
+  const revertedPatch = (expectedVersion: number, program: string) => handleEducationUpdate(
+    request(`https://example.test/api/admin/education/${VALID_ID}`, "PATCH", JSON.stringify({ program }), "application/json", "https://example.test", `"${expectedVersion}"`),
+    VALID_ID,
+    {
+      authorize: allow,
+      update: (id, fields, version, now) => updateEducationInTransaction(revertedMock.transaction, id, fields, version, now),
+      now: () => NOW,
+    },
+  );
+  assert.equal((await revertedPatch(1, "Temporary value")).status, 200);
+  assert.equal((await revertedPatch(2, "Original")).status, 200);
+  assert.equal(revertedMock.getSavedRecord().program, "Original");
+  assert.equal(revertedMock.getSavedRecord().version, 3);
+  assert.equal((await revertedPatch(1, "Stale value")).status, 409);
+  assert.equal(revertedMock.getSavedRecord().program, "Original");
+  assert.equal(revertedMock.getSavedRecord().version, 3);
 });
 
 test("deterministic list ordering uses sort order, start date with nulls last, then ID", () => {
@@ -542,17 +694,17 @@ test("PATCH rejects unexpected fields and hides database errors", async () => {
 test("DELETE requires authorization and returns not found for a missing record", async () => {
   let deleteCalls = 0;
   const denied = await handleEducationDelete(
-    request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE"),
+    request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE", undefined, "application/json", "https://example.test", '"1"'),
     VALID_ID,
-    { authorize: async () => Response.json({ error: "Authentication is required." }, { status: 401 }), delete: async () => { deleteCalls += 1; return true; } },
+    { authorize: async () => Response.json({ error: "Authentication is required." }, { status: 401 }), delete: async () => { deleteCalls += 1; return { kind: "deleted" }; } },
   );
   assert.equal(denied.status, 401);
   assert.equal(deleteCalls, 0);
 
   const missing = await handleEducationDelete(
-    request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE"),
+    request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE", undefined, "application/json", "https://example.test", '"1"'),
     VALID_ID,
-    { authorize: allow, delete: async () => false },
+    { authorize: allow, delete: async () => ({ kind: "missing" }) },
   );
   assert.equal(missing.status, 404);
 });
@@ -560,21 +712,84 @@ test("DELETE requires authorization and returns not found for a missing record",
 test("DELETE validates UUIDs and hides persistence errors", async () => {
   let deleteCalls = 0;
   const invalid = await handleEducationDelete(
-    request("https://example.test/api/admin/education/invalid", "DELETE"),
+    request("https://example.test/api/admin/education/invalid", "DELETE", undefined, "application/json", "https://example.test", '"1"'),
     INVALID_ID,
-    { authorize: allow, delete: async () => { deleteCalls += 1; return false; } },
+    { authorize: allow, delete: async () => { deleteCalls += 1; return { kind: "missing" }; } },
   );
   assert.equal(invalid.status, 404);
   assert.equal(deleteCalls, 0);
 
   const failed = await handleEducationDelete(
-    request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE"),
+    request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE", undefined, "application/json", "https://example.test", '"1"'),
     VALID_ID,
     { authorize: allow, delete: async () => { throw new Error("private database detail"); } },
   );
   assert.equal(failed.status, 500);
   assert.equal(failed.headers.get("cache-control"), "no-store");
   assert.deepEqual(await failed.json(), { error: "Unable to delete the Education record." });
+});
+
+test("DELETE requires a strong expected version and safely maps atomic outcomes", async () => {
+  let deleteCalls = 0;
+  for (const token of [null, "1", 'W/"1"', '"0"', '"-1"', '"1.5"', '"not-a-number"', '"2147483648"']) {
+    const response = await handleEducationDelete(
+      request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE", undefined, "application/json", "https://example.test", token),
+      VALID_ID,
+      { authorize: allow, delete: async () => { deleteCalls += 1; return { kind: "missing" }; } },
+    );
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  assert.equal(deleteCalls, 0);
+
+  let received: { id: string; version: number } | undefined;
+  const deleted = await handleEducationDelete(
+    request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE", undefined, "application/json", "https://example.test", '"3"'),
+    VALID_ID,
+    {
+      authorize: allow,
+      delete: async (id, version) => {
+        received = { id, version };
+        return { kind: "deleted" };
+      },
+    },
+  );
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(received, { id: VALID_ID, version: 3 });
+  assert.deepEqual(await deleted.json(), { success: true });
+
+  const conflict = await handleEducationDelete(
+    request(`https://example.test/api/admin/education/${VALID_ID}`, "DELETE", undefined, "application/json", "https://example.test", '"1"'),
+    VALID_ID,
+    { authorize: allow, delete: async () => ({ kind: "conflict" }) },
+  );
+  assert.equal(conflict.status, 409);
+  assert.match((await conflict.json() as { error: string }).error, /was not deleted/u);
+});
+
+test("Education atomic DELETE compares and deletes only the expected version", async () => {
+  let deleteWhere: unknown;
+  let currentVersion: number | null = 2;
+  let deleteCount = 1;
+  const transaction = {
+    $queryRaw: async () => currentVersion === null ? [] : [{ id: VALID_ID, version: currentVersion }],
+    education: {
+      deleteMany: async ({ where }: { where: unknown }) => {
+        deleteWhere = where;
+        return { count: deleteCount };
+      },
+    },
+  } as never;
+
+  assert.deepEqual(await deleteEducationWithVersion(transaction, VALID_ID, 1), { kind: "conflict" });
+  assert.equal(deleteWhere, undefined);
+  assert.deepEqual(await deleteEducationWithVersion(transaction, VALID_ID, 2), { kind: "deleted" });
+  assert.deepEqual(deleteWhere, { id: VALID_ID, version: 2 });
+  currentVersion = null;
+  assert.deepEqual(await deleteEducationWithVersion(transaction, VALID_ID, 2), { kind: "missing" });
+  currentVersion = 2;
+  deleteCount = 0;
+  assert.deepEqual(await deleteEducationWithVersion(transaction, VALID_ID, 2), { kind: "conflict" });
 });
 
 test("shared write authorization rejects untrusted Origins and invalid JSON content types", async () => {

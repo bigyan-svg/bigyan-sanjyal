@@ -6,6 +6,7 @@ import { hasTrustedRequestOrigin } from "@/lib/auth/origin";
 import { revokeAdminSession } from "@/lib/auth/session-revocation";
 import { validateAdminSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
+import { logAdminAuthDiagnostic } from "@/lib/auth/auth-diagnostics";
 
 const ADMIN_SESSION_COOKIE_NAME = "admin_session";
 
@@ -31,13 +32,33 @@ export async function POST(request: Request): Promise<Response> {
     const token = cookieStore.get(ADMIN_SESSION_COOKIE_NAME)?.value;
 
     if (token) {
-      const session = await validateAdminSession(token);
+      const session = await validateAdminSession(token, "logout");
 
       if (session) {
-        await revokeAdminSession(session.sessionId, {
+        const revokedCount = await revokeAdminSession(session.sessionId, {
           updateMany: (args) => prisma.adminSession.updateMany(args),
         });
+        logAdminAuthDiagnostic({
+          boundary: "logout",
+          outcome: revokedCount === 1 ? "revoked" : "rejected",
+          phase: "logout-revocation",
+          reason: revokedCount === 1 ? undefined : "session-revoked",
+        });
+      } else {
+        logAdminAuthDiagnostic({
+          boundary: "logout",
+          outcome: "rejected",
+          phase: "logout-revocation",
+          reason: "session-not-found",
+        });
       }
+    } else {
+      logAdminAuthDiagnostic({
+        boundary: "logout",
+        outcome: "rejected",
+        phase: "logout-revocation",
+        reason: "missing-cookie",
+      });
     }
   } catch {
     failed = true;
@@ -45,6 +66,12 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     await clearAdminSessionCookie();
+    logAdminAuthDiagnostic({
+      boundary: "logout",
+      outcome: "cleared",
+      phase: "logout-revocation",
+      cookieName: ADMIN_SESSION_COOKIE_NAME,
+    });
   } catch {
     failed = true;
   }

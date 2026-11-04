@@ -1,10 +1,10 @@
 "use client";
 
 import { ArrowRight, Eye, EyeOff, LoaderCircle } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { TextInput } from "@/components/ui/form-field";
+import { navigateAfterAdminLogin } from "@/lib/admin-login-flow";
 
 const MAX_EMAIL_LENGTH = 320;
 const MAX_PASSWORD_LENGTH = 1024;
@@ -18,7 +18,6 @@ interface FieldErrors {
 }
 
 export function AdminLoginForm() {
-  const router = useRouter();
   const emailInputRef = useRef<HTMLInputElement>(null);
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState("");
@@ -75,7 +74,12 @@ export function AdminLoginForm() {
         body: JSON.stringify({ email: normalizedEmail, password }),
       });
 
-      if (!response.ok) {
+      const navigationResult = await navigateAfterAdminLogin(
+        response,
+        (path) => window.location.replace(path),
+      );
+
+      if (navigationResult === "rejected") {
         setFormError(GENERIC_LOGIN_ERROR);
         setPassword("");
         passwordInputRef.current?.focus();
@@ -85,7 +89,6 @@ export function AdminLoginForm() {
       setEmail("");
       setPassword("");
       setIsPasswordVisible(false);
-      router.replace("/admin");
     } catch {
       setFormError(GENERIC_LOGIN_ERROR);
       setPassword("");

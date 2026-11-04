@@ -12,6 +12,7 @@ import {
   type EducationPatchData,
   type EducationRecord,
 } from "./education-validation";
+import { expectedVersionEntityTag, parseExpectedVersion } from "./optimistic-version";
 
 export const EDUCATION_REQUEST_MAX_BYTES = 64 * 1024;
 
@@ -19,6 +20,16 @@ function jsonResponse(body: unknown, status: number): Response {
   return Response.json(body, {
     status,
     headers: { "Cache-Control": "no-store" },
+  });
+}
+
+function versionedJsonResponse(body: unknown, status: number, version: number): Response {
+  return Response.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      ETag: expectedVersionEntityTag(version),
+    },
   });
 }
 
@@ -50,10 +61,12 @@ async function readRequestBody(request: Request): Promise<
 }
 
 export interface EducationUpdateResult {
-  kind: "missing" | "invalid" | "updated";
+  kind: "missing" | "conflict" | "invalid" | "updated";
   errors?: EducationFieldErrors;
   education?: EducationRecord;
 }
+
+export type EducationDeleteOutcome = { kind: "missing" | "conflict" | "deleted" };
 
 export async function handleEducationList(
   request: Request,
@@ -106,7 +119,7 @@ export async function handleEducationCreate(
 
   try {
     const education = await dependencies.create(data);
-    return jsonResponse({ education }, 201);
+    return versionedJsonResponse({ education }, 201, education.version);
   } catch {
     return jsonResponse({ error: "Unable to create the Education record." }, 500);
   }
@@ -120,6 +133,7 @@ export async function handleEducationUpdate(
     update(
       id: string,
       patch: EducationPatchData,
+      expectedVersion: number,
       now: Date,
     ): Promise<EducationUpdateResult>;
     now?: () => Date;
@@ -130,6 +144,11 @@ export async function handleEducationUpdate(
 
   if (!EDUCATION_ID_PATTERN.test(id)) {
     return jsonResponse({ error: "Education record not found." }, 404);
+  }
+
+  const expectedVersion = parseExpectedVersion(request.headers.get("If-Match"));
+  if (expectedVersion === null) {
+    return jsonResponse({ error: "A valid expected version is required. Reload the record and try again." }, 400);
   }
 
   const parsedBody = await readRequestBody(request);
@@ -147,9 +166,20 @@ export async function handleEducationUpdate(
   }
 
   try {
-    const result = await dependencies.update(id, parsed.data, dependencies.now?.() ?? new Date());
+    const result = await dependencies.update(
+      id,
+      parsed.data,
+      expectedVersion,
+      dependencies.now?.() ?? new Date(),
+    );
     if (result.kind === "missing") {
       return jsonResponse({ error: "Education record not found." }, 404);
+    }
+    if (result.kind === "conflict") {
+      return jsonResponse(
+        { error: "This record changed since you opened it. Reload the latest version and reconcile your edits before saving again." },
+        409,
+      );
     }
     if (result.kind === "invalid") {
       return jsonResponse(
@@ -160,7 +190,7 @@ export async function handleEducationUpdate(
     if (!result.education) {
       return jsonResponse({ error: "Unable to update the Education record." }, 500);
     }
-    return jsonResponse({ education: result.education }, 200);
+    return versionedJsonResponse({ education: result.education }, 200, result.education.version);
   } catch {
     return jsonResponse({ error: "Unable to update the Education record." }, 500);
   }
@@ -171,7 +201,7 @@ export async function handleEducationDelete(
   id: string,
   dependencies: {
     authorize(request: Request): Promise<Response | null>;
-    delete(id: string): Promise<boolean>;
+    delete(id: string, expectedVersion: number): Promise<EducationDeleteOutcome>;
   },
 ): Promise<Response> {
   const authorizationError = await getAuthorizationError(request, dependencies.authorize);
@@ -181,9 +211,24 @@ export async function handleEducationDelete(
     return jsonResponse({ error: "Education record not found." }, 404);
   }
 
+  const expectedVersion = parseExpectedVersion(request.headers.get("If-Match"));
+  if (expectedVersion === null) {
+    return jsonResponse(
+      { error: "A valid expected version is required. Reload the Education record and try again." },
+      400,
+    );
+  }
+
   try {
-    if (!(await dependencies.delete(id))) {
+    const result = await dependencies.delete(id, expectedVersion);
+    if (result.kind === "missing") {
       return jsonResponse({ error: "Education record not found." }, 404);
+    }
+    if (result.kind === "conflict") {
+      return jsonResponse(
+        { error: "This Education record changed since it was loaded. It was not deleted; reload the latest version before trying again." },
+        409,
+      );
     }
     return jsonResponse({ success: true }, 200);
   } catch {

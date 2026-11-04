@@ -10,7 +10,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { ContentStatus } from "@/generated/prisma/client";
 import { SkillIcon } from "@/components/skills/skill-icon";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/card";
 import { TextArea, TextInput } from "@/components/ui/form-field";
 import { SKILL_ICON_OPTIONS } from "@/lib/skill-icons";
 import { confirmDiscardIfDirty, hasUnsavedChanges } from "@/lib/unsaved-changes";
+import { useAdminUnsavedNavigationProtection } from "@/components/admin/admin-unsaved-navigation-guard";
 import type { SkillCategoryItem, SkillItem } from "@/lib/skill-types";
 
 type SkillFormValues = {
@@ -119,6 +120,19 @@ export function SkillsManager({
   const [pageSuccess, setPageSuccess] = useState("");
   const skillFormDirtyRef = useRef(false);
   const categoryFormDirtyRef = useRef(false);
+  const [skillFormIsDirty, setSkillFormIsDirty] = useState(false);
+  const [categoryFormIsDirty, setCategoryFormIsDirty] = useState(false);
+  useAdminUnsavedNavigationProtection(skillFormIsDirty || categoryFormIsDirty);
+
+  const reportSkillFormDirty = useCallback((isDirty: boolean) => {
+    skillFormDirtyRef.current = isDirty;
+    setSkillFormIsDirty(isDirty);
+  }, []);
+
+  const reportCategoryFormDirty = useCallback((isDirty: boolean) => {
+    categoryFormDirtyRef.current = isDirty;
+    setCategoryFormIsDirty(isDirty);
+  }, []);
 
   function canDismissCurrentForm(): boolean {
     if (editor && !confirmDiscardIfDirty(skillFormDirtyRef.current)) return false;
@@ -126,11 +140,13 @@ export function SkillsManager({
 
     skillFormDirtyRef.current = false;
     categoryFormDirtyRef.current = false;
+    setSkillFormIsDirty(false);
+    setCategoryFormIsDirty(false);
     return true;
   }
 
   function saveSkill(skill: SkillItem) {
-    skillFormDirtyRef.current = false;
+    reportSkillFormDirty(false);
     setSkills((current) => sortedSkills([
       ...current.filter((item) => item.id !== skill.id),
       skill,
@@ -141,7 +157,7 @@ export function SkillsManager({
   }
 
   function saveCategory(category: SkillCategoryItem) {
-    categoryFormDirtyRef.current = false;
+    reportCategoryFormDirty(false);
     const isUpdate = categories.some((item) => item.id === category.id);
     setCategories((current) => [
       ...current.filter((item) => item.id !== category.id),
@@ -321,7 +337,7 @@ export function SkillsManager({
             setShowCategoryForm(false);
             setEditingCategory(null);
           }}
-          onDirtyChange={(isDirty) => { categoryFormDirtyRef.current = isDirty; }}
+          onDirtyChange={reportCategoryFormDirty}
           onSaved={saveCategory}
         />
       ) : null}
@@ -336,7 +352,7 @@ export function SkillsManager({
             if (!canDismissCurrentForm()) return;
             setEditor(null);
           }}
-          onDirtyChange={(isDirty) => { skillFormDirtyRef.current = isDirty; }}
+          onDirtyChange={reportSkillFormDirty}
           onSaved={saveSkill}
         />
       ) : null}

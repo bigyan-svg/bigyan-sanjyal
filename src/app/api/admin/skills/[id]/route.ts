@@ -4,6 +4,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { authorizeAdminContentWrite, adminContentResponse } from "@/lib/auth/admin-content";
 import { JsonRequestTooLargeError, readJsonRequest } from "@/lib/json-request";
 import { prisma } from "@/lib/prisma";
+import { deleteSkillAndBumpProjectVersions } from "@/lib/project-content";
 import { parseUpdateSkill, SKILL_ID_PATTERN } from "@/lib/skill-validation";
 
 const skillSelect = {
@@ -131,7 +132,12 @@ export async function DELETE(
   }
 
   try {
-    await prisma.skill.delete({ where: { id } });
+    const deleted = await prisma.$transaction((transaction) =>
+      deleteSkillAndBumpProjectVersions(transaction, id),
+    );
+    if (!deleted) {
+      return adminContentResponse({ error: "Skill not found." }, 404);
+    }
     return adminContentResponse({ success: true }, 200);
   } catch (error) {
     if (isRecordNotFoundError(error)) {

@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { ContentStatus, ProjectLinkType } from "@/generated/prisma/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -41,7 +41,19 @@ import type {
   AdminProjectItem,
   ProjectCategoryOption,
 } from "@/lib/project-types";
+import { deleteProjectRecord, saveProjectRecord } from "@/lib/project-form";
+import {
+  canDismissProjectEditor,
+  finishProjectEditorSave,
+  updateProjectEditorSaveLock,
+  type ProjectEditorSession,
+} from "@/lib/project-editor-state";
+import {
+  createProjectEditorSaveGuard,
+  withProjectEditorSaveLock,
+} from "@/lib/project-editor-save-lock";
 import { confirmDiscardIfDirty, hasUnsavedChanges } from "@/lib/unsaved-changes";
+import { useAdminUnsavedNavigationProtection } from "@/components/admin/admin-unsaved-navigation-guard";
 
 interface ProjectPayload {
   title: string;
@@ -109,19 +121,6 @@ function responseError(result: unknown, fallback: string): string {
     if (typeof error === "string") return error;
   }
   return fallback;
-}
-
-function responseFields(result: unknown): ProjectFieldErrors {
-  if (
-    typeof result === "object" &&
-    result !== null &&
-    "fields" in result &&
-    typeof result.fields === "object" &&
-    result.fields !== null
-  ) {
-    return result.fields as ProjectFieldErrors;
-  }
-  return {};
 }
 
 function categoryResponseFields(result: unknown): ProjectCategoryFieldErrors {
@@ -222,7 +221,7 @@ export function ProjectsManager({
 }) {
   const [projects, setProjects] = useState(() => sortProjects(initialProjects));
   const [categories, setCategories] = useState(() => sortProjectCategories(initialCategories));
-  const [editor, setEditor] = useState<{ project: AdminProjectItem | null } | null>(null);
+  const [editor, setEditor] = useState<ProjectEditorSession<AdminProjectItem | null> | null>(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [editingCategory, setEditingCategory] = useState<AdminProjectCategory | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -234,21 +233,83 @@ export function ProjectsManager({
   const [pageSuccess, setPageSuccess] = useState("");
   const projectFormDirtyRef = useRef(false);
   const categoryFormDirtyRef = useRef(false);
+  const [projectFormIsDirty, setProjectFormIsDirty] = useState(false);
+  const [projectFormIsSaving, setProjectFormIsSaving] = useState(false);
+  const [categoryFormIsDirty, setCategoryFormIsDirty] = useState(false);
+  const currentProjectEditorKeyRef = useRef<string | null>(null);
+  const savingProjectEditorKeyRef = useRef<string | null>(null);
+  const deletingProjectIdRef = useRef<string | null>(null);
+  useAdminUnsavedNavigationProtection(
+    projectFormIsDirty || categoryFormIsDirty,
+    projectFormIsSaving,
+  );
+
+  const reportProjectFormDirty = useCallback((editorKey: string, isDirty: boolean) => {
+    if (currentProjectEditorKeyRef.current !== editorKey) return;
+    projectFormDirtyRef.current = isDirty;
+    setProjectFormIsDirty(isDirty);
+  }, []);
+
+  const reportProjectFormSaving = useCallback((editorKey: string, isSaving: boolean) => {
+    const currentSavingKey = savingProjectEditorKeyRef.current;
+    const nextSavingKey = updateProjectEditorSaveLock(
+      currentSavingKey,
+      editorKey,
+      isSaving,
+      currentProjectEditorKeyRef.current,
+    );
+    if (nextSavingKey === currentSavingKey) return;
+    savingProjectEditorKeyRef.current = nextSavingKey;
+    setProjectFormIsSaving(nextSavingKey !== null);
+  }, []);
+
+  const reportCategoryFormDirty = useCallback((isDirty: boolean) => {
+    categoryFormDirtyRef.current = isDirty;
+    setCategoryFormIsDirty(isDirty);
+  }, []);
 
   function canDismissProjectForm(): boolean {
+    if (!canDismissProjectEditor(savingProjectEditorKeyRef.current !== null)) return false;
     const canDismiss = confirmDiscardIfDirty(projectFormDirtyRef.current);
-    if (canDismiss) projectFormDirtyRef.current = false;
+    if (canDismiss) {
+      projectFormDirtyRef.current = false;
+      setProjectFormIsDirty(false);
+    }
     return canDismiss;
+  }
+
+  function openProjectEditor(project: AdminProjectItem | null) {
+    if (!canDismissProjectForm()) return;
+    const nextEditor = { key: createEditorKey(), project };
+    currentProjectEditorKeyRef.current = nextEditor.key;
+    projectFormDirtyRef.current = false;
+    setProjectFormIsDirty(false);
+    setEditor(nextEditor);
+    setPendingDelete(null);
+    setPageError("");
+    setPageSuccess("");
+  }
+
+  function closeProjectEditor(editorKey: string) {
+    if (currentProjectEditorKeyRef.current !== editorKey) return;
+    currentProjectEditorKeyRef.current = null;
+    projectFormDirtyRef.current = false;
+    setProjectFormIsDirty(false);
+    setEditor((current) => current?.key === editorKey ? null : current);
   }
 
   function canDismissCategoryForm(): boolean {
     const canDismiss = confirmDiscardIfDirty(categoryFormDirtyRef.current);
-    if (canDismiss) categoryFormDirtyRef.current = false;
+    if (canDismiss) reportCategoryFormDirty(false);
     return canDismiss;
   }
 
-  function saveProject(project: AdminProjectItem) {
-    projectFormDirtyRef.current = false;
+  function saveProject(project: AdminProjectItem, editorKey: string) {
+    if (currentProjectEditorKeyRef.current === editorKey) {
+      currentProjectEditorKeyRef.current = null;
+      projectFormDirtyRef.current = false;
+      setProjectFormIsDirty(false);
+    }
     const previous = projects.find((item) => item.id === project.id);
     const previousCategoryId = previous?.categoryId ?? null;
     const nextCategoryId = project.categoryId;
@@ -268,49 +329,36 @@ export function ProjectsManager({
     setProjects((current) =>
       sortProjects([...current.filter((item) => item.id !== project.id), project]),
     );
-    setEditor(null);
+    setEditor((current) => finishProjectEditorSave(current, editorKey, true));
     setPendingDelete(null);
     setPageError("");
     setPageSuccess("Project details saved.");
   }
 
   async function changeStatus(project: AdminProjectItem, status: ProjectStatus) {
-    if (mutatingId || deletingId) return;
+    if (mutatingId || deletingId || savingProjectEditorKeyRef.current !== null) return;
     setMutatingId(project.id);
     setPageError("");
     setPageSuccess("");
 
     try {
-      const response = await fetch(`/api/admin/projects/${project.id}`, {
-        method: "PATCH",
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: project.title,
-          slug: project.slug,
-          summary: project.summary,
-          description: project.description ?? "",
-          categoryId: project.categoryId ?? "",
-          featured: project.featured,
-          sortOrder: project.sortOrder,
-          status,
-        } satisfies ProjectPayload),
+      const saved = await saveProjectRecord(project, {
+        title: project.title,
+        slug: project.slug,
+        summary: project.summary,
+        description: project.description,
+        categoryId: project.categoryId,
+        featured: project.featured,
+        sortOrder: project.sortOrder,
+        status,
       });
-      const result: unknown = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        setPageError(responseError(result, `Unable to change project status (HTTP ${response.status}).`));
-        return;
-      }
-
-      if (!isProjectResponse(result)) {
-        setPageError("The project was updated, but its details could not be loaded.");
+      if (!saved.ok) {
+        setPageError(saved.error);
         return;
       }
 
       setProjects((current) => sortProjects(current.map((item) =>
-        item.id === result.project.id ? result.project : item,
+        item.id === saved.project.id ? saved.project : item,
       )));
       setPageSuccess(`Project moved to ${statusLabel(status).toLowerCase()}.`);
     } catch {
@@ -321,21 +369,22 @@ export function ProjectsManager({
   }
 
   async function deleteProject(project: AdminProjectItem) {
-    if (mutatingId || deletingId) return;
+    if (
+      mutatingId ||
+      deletingId ||
+      deletingProjectIdRef.current !== null ||
+      savingProjectEditorKeyRef.current !== null
+    ) return;
+    deletingProjectIdRef.current = project.id;
     setDeletingId(project.id);
     setPageError("");
     setPageSuccess("");
 
     try {
-      const response = await fetch(`/api/admin/projects/${project.id}`, {
-        method: "DELETE",
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      const result: unknown = await response.json().catch(() => null);
+      const result = await deleteProjectRecord(project.id, project.version);
 
-      if (!response.ok) {
-        setPageError(responseError(result, `Unable to delete project (HTTP ${response.status}).`));
+      if (!result.ok) {
+        setPageError(result.error);
         return;
       }
 
@@ -350,12 +399,15 @@ export function ProjectsManager({
     } catch {
       setPageError("Unable to delete the project. Please try again.");
     } finally {
-      setDeletingId(null);
+      if (deletingProjectIdRef.current === project.id) {
+        deletingProjectIdRef.current = null;
+        setDeletingId(null);
+      }
     }
   }
 
   function saveCategory(category: AdminProjectCategory) {
-    categoryFormDirtyRef.current = false;
+    reportCategoryFormDirty(false);
     setCategories((current) => sortProjectCategories([
       ...current.filter((item) => item.id !== category.id),
       category,
@@ -367,7 +419,7 @@ export function ProjectsManager({
   }
 
   async function deleteCategory(category: AdminProjectCategory) {
-    if (deletingCategoryId) return;
+    if (deletingCategoryId || savingProjectEditorKeyRef.current !== null) return;
 
     setDeletingCategoryId(category.id);
     setPageError("");
@@ -401,7 +453,7 @@ export function ProjectsManager({
     (highest, project) => Math.max(highest, project.sortOrder),
     -1,
   ) + 1;
-  const isBusy = Boolean(mutatingId || deletingId || deletingCategoryId);
+  const isBusy = Boolean(mutatingId || deletingId || deletingCategoryId || projectFormIsSaving);
   const nextCategorySortOrder = categories.reduce(
     (highest, category) => Math.max(highest, category.sortOrder),
     -1,
@@ -417,12 +469,7 @@ export function ProjectsManager({
         </div>
         <Button
           disabled={isBusy}
-          onClick={() => {
-            if (!canDismissProjectForm()) return;
-            setEditor({ project: null });
-            setPendingDelete(null);
-            setPageError("");
-          }}
+          onClick={() => openProjectEditor(null)}
         >
           <Plus aria-hidden="true" size={17} />
           Add project
@@ -476,7 +523,7 @@ export function ProjectsManager({
                 setShowCategoryForm(false);
                 setEditingCategory(null);
               }}
-              onDirtyChange={(isDirty) => { categoryFormDirtyRef.current = isDirty; }}
+              onDirtyChange={reportCategoryFormDirty}
               onSaved={saveCategory}
             />
           ) : null}
@@ -561,7 +608,7 @@ export function ProjectsManager({
                       </div>
                       <div className="project-management__confirm-actions">
                         <Button
-                          disabled={deletingCategoryId === category.id}
+                          disabled={isBusy || deletingCategoryId === category.id}
                           onClick={() => void deleteCategory(category)}
                           size="small"
                         >
@@ -573,7 +620,7 @@ export function ProjectsManager({
                           {deletingCategoryId === category.id ? "Deleting…" : "Confirm delete"}
                         </Button>
                         <Button
-                          disabled={deletingCategoryId === category.id}
+                          disabled={isBusy || deletingCategoryId === category.id}
                           onClick={() => setPendingCategoryDelete(null)}
                           size="small"
                           variant="subtle"
@@ -592,17 +639,19 @@ export function ProjectsManager({
 
       {editor ? (
         <ProjectForm
-          key={editor.project?.id ?? "new-project"}
+          key={editor.key}
+          editorKey={editor.key}
           categories={categories}
           skills={initialSkills}
           initialProject={editor.project}
           nextSortOrder={nextSortOrder}
           onCancel={() => {
             if (!canDismissProjectForm()) return;
-            setEditor(null);
+            closeProjectEditor(editor.key);
           }}
-          onDirtyChange={(isDirty) => { projectFormDirtyRef.current = isDirty; }}
-          onSaved={saveProject}
+          onDirtyChange={reportProjectFormDirty}
+          onSavingChange={reportProjectFormSaving}
+          onSaved={(project) => saveProject(project, editor.key)}
         />
       ) : null}
 
@@ -613,10 +662,7 @@ export function ProjectsManager({
           <p>Add a project when you have confirmed details ready to enter.</p>
           <Button
             disabled={isBusy}
-            onClick={() => {
-              if (!canDismissProjectForm()) return;
-              setEditor({ project: null });
-            }}
+            onClick={() => openProjectEditor(null)}
           >
             <Plus aria-hidden="true" size={17} />
             Add project
@@ -651,12 +697,7 @@ export function ProjectsManager({
               <div className="project-management__actions">
                 <Button
                   disabled={isBusy}
-                  onClick={() => {
-                    if (!canDismissProjectForm()) return;
-                    setEditor({ project });
-                    setPendingDelete(null);
-                    setPageError("");
-                  }}
+                  onClick={() => openProjectEditor(project)}
                   size="small"
                   variant="subtle"
                 >
@@ -698,7 +739,7 @@ export function ProjectsManager({
                   disabled={isBusy}
                   onClick={() => {
                     if (!canDismissProjectForm()) return;
-                    setEditor(null);
+                    if (editor) closeProjectEditor(editor.key);
                     setPageSuccess("");
                     setPageError("");
                     setPendingDelete(project.id);
@@ -723,14 +764,14 @@ export function ProjectsManager({
                   </div>
                   <div className="project-management__confirm-actions">
                     <Button
-                      disabled={deletingId === project.id}
+                      disabled={isBusy || deletingId === project.id}
                       onClick={() => void deleteProject(project)}
                       size="small"
                     >
                       {deletingId === project.id ? "Deleting…" : "Confirm permanent delete"}
                     </Button>
                     <Button
-                      disabled={deletingId === project.id}
+                      disabled={isBusy || deletingId === project.id}
                       onClick={() => setPendingDelete(null)}
                       size="small"
                       variant="subtle"
@@ -745,16 +786,6 @@ export function ProjectsManager({
         </div>
       )}
     </div>
-  );
-}
-
-function isProjectResponse(result: unknown): result is { project: AdminProjectItem } {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    "project" in result &&
-    typeof result.project === "object" &&
-    result.project !== null
   );
 }
 
@@ -972,20 +1003,24 @@ function ProjectCategoryForm({
 }
 
 function ProjectForm({
+  editorKey,
   categories,
   skills,
   initialProject,
   nextSortOrder,
   onCancel,
   onDirtyChange,
+  onSavingChange,
   onSaved,
 }: {
+  editorKey: string;
   categories: ProjectCategoryOption[];
   skills: AdminProjectSkillOption[];
   initialProject: AdminProjectItem | null;
   nextSortOrder: number;
   onCancel: () => void;
-  onDirtyChange: (isDirty: boolean) => void;
+  onDirtyChange: (editorKey: string, isDirty: boolean) => void;
+  onSavingChange: (editorKey: string, isSaving: boolean) => void;
   onSaved: (project: AdminProjectItem) => void;
 }) {
   const [initialValues] = useState(() => toFormValues(initialProject, nextSortOrder));
@@ -994,6 +1029,7 @@ function ProjectForm({
   const [errors, setErrors] = useState<ProjectFieldErrors>({});
   const [errorMessage, setErrorMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const saveGuardRef = useRef(createProjectEditorSaveGuard());
   const [slugManuallyEdited, setSlugManuallyEdited] = useState(Boolean(initialProject));
   const [relationSectionsDirty, setRelationSectionsDirty] = useState({
     skillIds: false,
@@ -1002,7 +1038,7 @@ function ProjectForm({
   });
   const isEditing = initialProject !== null;
 
-  useEffect(() => onDirtyChange(isDirty), [isDirty, onDirtyChange]);
+  useEffect(() => onDirtyChange(editorKey, isDirty), [editorKey, isDirty, onDirtyChange]);
 
   function updateField<K extends keyof ProjectFormValues>(field: K, value: ProjectFormValues[K]) {
     setValues((current) => ({ ...current, [field]: value }));
@@ -1039,7 +1075,7 @@ function ProjectForm({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isSaving) return;
+    if (isSaving || saveGuardRef.current.isSaving(editorKey)) return;
 
     const sortOrder = Number(values.sortOrder);
     if (
@@ -1055,7 +1091,6 @@ function ProjectForm({
       return;
     }
 
-    setIsSaving(true);
     setErrors({});
     setErrorMessage("");
 
@@ -1066,34 +1101,26 @@ function ProjectForm({
         if (!relationSectionsDirty.links) delete payload.links;
         if (!relationSectionsDirty.images) delete payload.images;
       }
-      const response = await fetch(
-        initialProject ? `/api/admin/projects/${initialProject.id}` : "/api/admin/projects",
-        {
-          method: initialProject ? "PATCH" : "POST",
-          credentials: "same-origin",
-          cache: "no-store",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+      const attempt = await withProjectEditorSaveLock(
+        saveGuardRef.current,
+        editorKey,
+        (key, saving) => {
+          setIsSaving(saving);
+          onSavingChange(key, saving);
         },
+        () => saveProjectRecord(initialProject, payload),
       );
-      const result: unknown = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        setErrors(responseFields(result));
-        setErrorMessage(responseError(result, `Unable to save the project (HTTP ${response.status}).`));
+      if (!attempt.started) return;
+      const saved = attempt.value;
+      if (!saved.ok) {
+        setErrors(saved.fields);
+        setErrorMessage(saved.error);
         return;
       }
 
-      if (!isProjectResponse(result)) {
-        setErrorMessage("The project was saved, but its details could not be loaded.");
-        return;
-      }
-
-      onSaved(result.project);
+      onSaved(saved.project);
     } catch {
       setErrorMessage("Unable to save the project. Please try again.");
-    } finally {
-      setIsSaving(false);
     }
   }
 

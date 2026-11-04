@@ -9,7 +9,11 @@ import {
   createBlogCategorySlug,
   createBlogTagSlug,
 } from "@/lib/blog-taxonomy-validation";
+import { deleteBlogTaxonomy, saveBlogTaxonomy } from "@/lib/blog-taxonomy-client";
+import type { BlogOperationRunResult } from "@/lib/blog-operation-coordinator";
+import { recoverBlogTaxonomyDelete } from "@/lib/blog-taxonomy-recovery";
 import type { AdminBlogCategory, AdminBlogTag } from "@/lib/blog-types";
+import type { BlogTaxonomyKind } from "@/lib/blog-taxonomy-client";
 import { confirmDiscardIfDirty, hasUnsavedChanges } from "@/lib/unsaved-changes";
 
 interface CategoryValues {
@@ -43,52 +47,27 @@ function tagValues(tag: AdminBlogTag | null): TagValues {
   return { name: tag?.name ?? "", slug: tag?.slug ?? "" };
 }
 
-function readError(result: unknown, fallback: string): string {
-  if (typeof result === "object" && result !== null && "error" in result && typeof result.error === "string") {
-    return result.error;
-  }
-  return fallback;
-}
-
-function readFields(result: unknown): Record<string, string> {
-  if (
-    typeof result === "object" && result !== null && "fields" in result &&
-    typeof result.fields === "object" && result.fields !== null
-  ) {
-    return result.fields as Record<string, string>;
-  }
-  return {};
-}
-
-async function readJson(response: Response): Promise<unknown> {
-  return response.json().catch(() => null) as Promise<unknown>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isObjectWith(result: unknown, key: string): result is Record<string, unknown> {
-  return isRecord(result) && key in result && typeof result[key] === "object" && result[key] !== null;
-}
-
 export function BlogTaxonomyManager({
   categories,
   tags,
+  operationPending,
+  onCanStartOperation,
+  onRunOperation,
   onBeginEditing,
-  onCategoryDeleted,
   onCategorySaved,
   onDirtyChange,
-  onTagDeleted,
+  onRefreshAfterDelete,
   onTagSaved,
 }: {
   categories: AdminBlogCategory[];
   tags: AdminBlogTag[];
+  operationPending: boolean;
+  onCanStartOperation: () => boolean;
+  onRunOperation: <T>(operation: () => Promise<T>) => Promise<BlogOperationRunResult<T>>;
   onBeginEditing: () => boolean;
-  onCategoryDeleted: (id: string) => void;
   onCategorySaved: (category: AdminBlogCategory) => void;
   onDirtyChange: (isDirty: boolean) => void;
-  onTagDeleted: (id: string) => void;
+  onRefreshAfterDelete: (kind: BlogTaxonomyKind, deletionConfirmed: boolean) => Promise<boolean>;
   onTagSaved: (tag: AdminBlogTag) => void;
 }) {
   const [editor, setEditor] = useState<TaxonomyEditor | null>(null);
@@ -101,6 +80,7 @@ export function BlogTaxonomyManager({
   const [feedbackKind, setFeedbackKind] = useState<"category" | "tag">("category");
 
   const isDirty = editor !== null && hasUnsavedChanges(editor.initial, editor.values);
+  const isLocked = operationPending || saving || Boolean(deletingId);
 
   useEffect(() => onDirtyChange(isDirty), [isDirty, onDirtyChange]);
 
@@ -109,6 +89,7 @@ export function BlogTaxonomyManager({
   }
 
   function openCategory(category: AdminBlogCategory | null) {
+    if (operationPending || !onCanStartOperation()) return;
     if (!canDismiss() || !onBeginEditing()) return;
     const nextSortOrder = categories.reduce((highest, item) => Math.max(highest, item.sortOrder), -1) + 1;
     const values = categoryValues(category, nextSortOrder);
@@ -121,6 +102,7 @@ export function BlogTaxonomyManager({
   }
 
   function openTag(tag: AdminBlogTag | null) {
+    if (operationPending || !onCanStartOperation()) return;
     if (!canDismiss() || !onBeginEditing()) return;
     const values = tagValues(tag);
     setEditor({ kind: "tag", id: tag?.id ?? null, initial: values, values, slugManuallyEdited: false });
@@ -132,6 +114,7 @@ export function BlogTaxonomyManager({
   }
 
   function closeEditor() {
+    if (operationPending || !onCanStartOperation()) return;
     if (!canDismiss()) return;
     setEditor(null);
     setFieldErrors({});
@@ -140,126 +123,127 @@ export function BlogTaxonomyManager({
 
   async function saveCategory(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editor || editor.kind !== "category" || saving || deletingId) return;
-    setSaving(true);
-    setError("");
-    setSuccess("");
-    setFeedbackKind("category");
-    setFieldErrors({});
+    if (!editor || editor.kind !== "category" || saving || deletingId || operationPending || !onCanStartOperation()) return;
+    await onRunOperation(async () => {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+      setFeedbackKind("category");
+      setFieldErrors({});
 
-    try {
-      const response = await fetch(editor.id ? `/api/admin/blog/categories/${editor.id}` : "/api/admin/blog/categories", {
-          method: editor.id ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
-          cache: "no-store",
-          body: JSON.stringify({
-            name: editor.values.name,
-            slug: editor.values.slug,
-            description: editor.values.description,
-            sortOrder: Number(editor.values.sortOrder),
-          }),
-        },
-      );
-      const result = await readJson(response);
-      if (!response.ok) {
-        setError(readError(result, "Unable to save the category."));
-        setFieldErrors(readFields(result));
-        return;
+      try {
+        const saved = await saveBlogTaxonomy("category", editor.id, {
+          name: editor.values.name,
+          slug: editor.values.slug,
+          description: editor.values.description,
+          sortOrder: Number(editor.values.sortOrder),
+        });
+        if (!saved.ok) {
+          setError(saved.error);
+          setFieldErrors(saved.fields);
+          return;
+        }
+        if (!("category" in saved)) {
+          setError("The server returned an unexpected response. Please reload the page.");
+          return;
+        }
+        onCategorySaved(saved.category);
+        setEditor(null);
+        setSuccess(!editor.id
+          ? "Category created. It is now available in the post editor."
+          : "Category updated.");
+      } catch {
+        setError("Unable to save the category. Please try again.");
+      } finally {
+        setSaving(false);
       }
-      if (!isObjectWith(result, "category")) {
-        setError("The server returned an unexpected response. Please reload the page.");
-        return;
-      }
-      const category = result.category as AdminBlogCategory;
-      onCategorySaved(category);
-      setEditor(null);
-      setSuccess(!editor.id
-        ? "Category created. It is now available in the post editor."
-        : "Category updated.");
-    } catch {
-      setError("Unable to save the category. Please try again.");
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   async function saveTag(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editor || editor.kind !== "tag" || saving || deletingId) return;
-    setSaving(true);
-    setError("");
-    setSuccess("");
-    setFeedbackKind("tag");
-    setFieldErrors({});
+    if (!editor || editor.kind !== "tag" || saving || deletingId || operationPending || !onCanStartOperation()) return;
+    await onRunOperation(async () => {
+      setSaving(true);
+      setError("");
+      setSuccess("");
+      setFeedbackKind("tag");
+      setFieldErrors({});
 
-    try {
-      const response = await fetch(editor.id ? `/api/admin/blog/tags/${editor.id}` : "/api/admin/blog/tags", {
-        method: editor.id ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        body: JSON.stringify({ name: editor.values.name, slug: editor.values.slug }),
-      });
-      const result = await readJson(response);
-      if (!response.ok) {
-        setError(readError(result, "Unable to save the tag."));
-        setFieldErrors(readFields(result));
-        return;
+      try {
+        const saved = await saveBlogTaxonomy("tag", editor.id, {
+          name: editor.values.name,
+          slug: editor.values.slug,
+        });
+        if (!saved.ok) {
+          setError(saved.error);
+          setFieldErrors(saved.fields);
+          return;
+        }
+        if (!("tag" in saved)) {
+          setError("The server returned an unexpected response. Please reload the page.");
+          return;
+        }
+        onTagSaved(saved.tag);
+        setEditor(null);
+        setSuccess(!editor.id
+          ? "Tag created. It is now available in the post editor."
+          : "Tag updated.");
+      } catch {
+        setError("Unable to save the tag. Please try again.");
+      } finally {
+        setSaving(false);
       }
-      if (!isObjectWith(result, "tag")) {
-        setError("The server returned an unexpected response. Please reload the page.");
-        return;
-      }
-      const tag = result.tag as AdminBlogTag;
-      onTagSaved(tag);
-      setEditor(null);
-      setSuccess(!editor.id
-        ? "Tag created. It is now available in the post editor."
-        : "Tag updated.");
-    } catch {
-      setError("Unable to save the tag. Please try again.");
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   async function deleteTaxonomy(item: PendingDelete) {
-    if (deletingId || saving) return;
-    setDeletingId(item.id);
-    setError("");
-    setSuccess("");
-    setFeedbackKind(item.kind);
-    try {
-      const response = await fetch(`/api/admin/blog/${item.kind === "category" ? "categories" : "tags"}/${item.id}`, {
-        method: "DELETE",
-        cache: "no-store",
-      });
-      const result = await readJson(response);
-      if (!response.ok) {
-        setError(readError(result, `Unable to delete the ${item.kind}.`));
-        return;
+    if (deletingId || saving || operationPending || !onCanStartOperation()) return;
+    if (!onBeginEditing()) return;
+    await onRunOperation(async () => {
+      setDeletingId(item.id);
+      setError("");
+      setSuccess("");
+      setFeedbackKind(item.kind);
+      try {
+        const recovery = await recoverBlogTaxonomyDelete(
+          () => deleteBlogTaxonomy(item.kind, item.id),
+          async (deletionConfirmed) => {
+            setPendingDelete(null);
+            return onRefreshAfterDelete(item.kind, deletionConfirmed);
+          },
+        );
+        if (recovery.outcome === "rejected") {
+          setError(recovery.error);
+          return;
+        }
+        if (recovery.outcome === "refresh-failed") {
+          setError(recovery.deletionConfirmed
+            ? `The ${item.kind} was deleted successfully, but Blog data could not be refreshed. Use the retry control above.`
+            : `The ${item.kind} deletion response was incomplete, and Blog data could not be refreshed. Use the retry control above.`);
+          return;
+        }
+        if (recovery.outcome === "refreshed-uncertain") {
+          setSuccess("Blog data was refreshed after an unexpected deletion response. Verify the current taxonomy state.");
+          return;
+        }
+        if (item.kind === "category") {
+          const count = recovery.count;
+          setSuccess(count > 0
+            ? `Category deleted. ${count} ${count === 1 ? "post is" : "posts are"} now uncategorized; no posts were deleted.`
+            : "Category deleted. No posts were affected.");
+        } else {
+          const count = recovery.count;
+          setSuccess(count > 0
+            ? `Tag deleted and removed from ${count} ${count === 1 ? "post" : "posts"}. No posts were deleted.`
+            : "Tag deleted. No posts were affected.");
+        }
+      } catch {
+        setError(`Unable to delete the ${item.kind}. Please try again.`);
+      } finally {
+        setDeletingId(null);
       }
-      if (item.kind === "category") {
-        const count = typeof result === "object" && result !== null && "detachedPostCount" in result && typeof result.detachedPostCount === "number"
-          ? result.detachedPostCount
-          : 0;
-        onCategoryDeleted(item.id);
-        setSuccess(count > 0
-          ? `Category deleted. ${count} ${count === 1 ? "post is" : "posts are"} now uncategorized; no posts were deleted.`
-          : "Category deleted. No posts were affected.");
-      } else {
-        const count = typeof result === "object" && result !== null && "removedAssociationCount" in result &&
-          typeof result.removedAssociationCount === "number" ? result.removedAssociationCount : 0;
-        onTagDeleted(item.id);
-        setSuccess(count > 0
-          ? `Tag deleted and removed from ${count} ${count === 1 ? "post" : "posts"}. No posts were deleted.`
-          : "Tag deleted. No posts were affected.");
-      }
-      setPendingDelete(null);
-    } catch {
-      setError(`Unable to delete the ${item.kind}. Please try again.`);
-    } finally {
-      setDeletingId(null);
-    }
+    });
   }
 
   return (
@@ -272,7 +256,7 @@ export function BlogTaxonomyManager({
               <h2 id="blog-categories-heading">Categories</h2>
               <p>Group related posts. Deleting a category leaves its posts intact and clears their category.</p>
             </div>
-            <Button disabled={saving || Boolean(deletingId)} onClick={() => openCategory(null)}>
+            <Button disabled={isLocked} onClick={() => openCategory(null)}>
               <FolderPlus aria-hidden="true" size={17} />
               Add category
             </Button>
@@ -287,13 +271,14 @@ export function BlogTaxonomyManager({
                   <p className="eyebrow">{editor.id ? "Edit category" : "New category"}</p>
                   <h3>{editor.initial.name || "Create a category"}</h3>
                 </div>
-                <Button aria-label="Close category editor" disabled={saving} onClick={closeEditor} size="small" variant="subtle">
+                <Button aria-label="Close category editor" disabled={isLocked} onClick={closeEditor} size="small" variant="subtle">
                   <X aria-hidden="true" size={16} /> Close
                 </Button>
               </div>
               <form className="project-management__form" onSubmit={(event) => void saveCategory(event)}>
                 <div className="project-management__form-row">
                   <TextInput
+                    disabled={isLocked}
                     error={fieldErrors.name}
                     id="blog-category-name"
                     label="Category name"
@@ -309,6 +294,7 @@ export function BlogTaxonomyManager({
                     value={editor.values.name}
                   />
                   <TextInput
+                    disabled={isLocked}
                     error={fieldErrors.slug}
                     hint="Lowercase letters and numbers separated by hyphens."
                     id="blog-category-slug"
@@ -325,6 +311,7 @@ export function BlogTaxonomyManager({
                 </div>
                 <div className="project-management__form-row">
                   <TextArea
+                    disabled={isLocked}
                     error={fieldErrors.description}
                     id="blog-category-description"
                     label="Description"
@@ -337,6 +324,7 @@ export function BlogTaxonomyManager({
                     value={editor.values.description}
                   />
                   <TextInput
+                    disabled={isLocked}
                     error={fieldErrors.sortOrder}
                     id="blog-category-sort-order"
                     label="Display order"
@@ -352,8 +340,8 @@ export function BlogTaxonomyManager({
                   />
                 </div>
                 <div className="project-management__editor-actions">
-                  <Button disabled={saving} onClick={closeEditor} type="button" variant="subtle"><X aria-hidden="true" size={15} />Cancel</Button>
-                  <Button disabled={saving} type="submit">{saving ? <LoaderCircle aria-hidden="true" className="project-management__spinner" size={15} /> : <Save aria-hidden="true" size={15} />}{saving ? "Saving…" : "Save category"}</Button>
+                  <Button disabled={isLocked} onClick={closeEditor} type="button" variant="subtle"><X aria-hidden="true" size={15} />Cancel</Button>
+                  <Button disabled={isLocked} type="submit">{saving ? <LoaderCircle aria-hidden="true" className="project-management__spinner" size={15} /> : <Save aria-hidden="true" size={15} />}{saving ? "Saving…" : "Save category"}</Button>
                 </div>
               </form>
             </Card>
@@ -372,8 +360,9 @@ export function BlogTaxonomyManager({
                     <p className="project-management__meta">{category.postCount} {category.postCount === 1 ? "post" : "posts"}<span aria-hidden="true"> · </span>Display order: {category.sortOrder}</p>
                   </div>
                   <div className="project-management__category-actions">
-                    <Button aria-label={`Edit category ${category.name}`} disabled={saving || Boolean(deletingId)} onClick={() => openCategory(category)} size="small" variant="subtle"><Pencil aria-hidden="true" size={15} />Edit</Button>
-                    <Button aria-label={`Delete category ${category.name}`} disabled={saving || Boolean(deletingId)} onClick={() => {
+                    <Button aria-label={`Edit category ${category.name}`} disabled={isLocked} onClick={() => openCategory(category)} size="small" variant="subtle"><Pencil aria-hidden="true" size={15} />Edit</Button>
+                    <Button aria-label={`Delete category ${category.name}`} disabled={isLocked} onClick={() => {
+                      if (!onCanStartOperation()) return;
                       if (!canDismiss()) return;
                       setEditor(null);
                       setPendingDelete({ kind: "category", id: category.id, name: category.name });
@@ -384,8 +373,8 @@ export function BlogTaxonomyManager({
                     <div aria-label={`Confirm deletion of category ${category.name}`} className="project-management__category-delete-confirm" role="group">
                       <div><strong>Delete {category.name}?</strong><p>{category.postCount > 0 ? `${category.postCount} ${category.postCount === 1 ? "post will" : "posts will"} remain and become uncategorized.` : "No posts will be changed."}</p></div>
                       <div className="project-management__confirm-actions">
-                        <Button disabled={deletingId === category.id} onClick={() => void deleteTaxonomy(pendingDelete)} size="small">{deletingId === category.id ? <LoaderCircle aria-hidden="true" className="project-management__spinner" size={15} /> : <Trash2 aria-hidden="true" size={15} />}{deletingId === category.id ? "Deleting…" : "Confirm delete"}</Button>
-                        <Button disabled={deletingId === category.id} onClick={() => setPendingDelete(null)} size="small" variant="subtle">Cancel</Button>
+                        <Button disabled={isLocked} onClick={() => void deleteTaxonomy(pendingDelete)} size="small">{deletingId === category.id ? <LoaderCircle aria-hidden="true" className="project-management__spinner" size={15} /> : <Trash2 aria-hidden="true" size={15} />}{deletingId === category.id ? "Deleting…" : "Confirm delete"}</Button>
+                        <Button disabled={isLocked} onClick={() => setPendingDelete(null)} size="small" variant="subtle">Cancel</Button>
                       </div>
                     </div>
                   ) : null}
@@ -404,7 +393,7 @@ export function BlogTaxonomyManager({
               <h2 id="blog-tags-heading">Tags</h2>
               <p>Attach one or more tags to posts. Deleting a tag removes its associations but keeps all posts.</p>
             </div>
-            <Button disabled={saving || Boolean(deletingId)} onClick={() => openTag(null)}>
+            <Button disabled={isLocked} onClick={() => openTag(null)}>
               <Plus aria-hidden="true" size={17} />
               Add tag
             </Button>
@@ -419,11 +408,12 @@ export function BlogTaxonomyManager({
                   <p className="eyebrow">{editor.id ? "Edit tag" : "New tag"}</p>
                   <h3>{editor.initial.name || "Create a tag"}</h3>
                 </div>
-                <Button aria-label="Close tag editor" disabled={saving} onClick={closeEditor} size="small" variant="subtle"><X aria-hidden="true" size={16} />Close</Button>
+                <Button aria-label="Close tag editor" disabled={isLocked} onClick={closeEditor} size="small" variant="subtle"><X aria-hidden="true" size={16} />Close</Button>
               </div>
               <form className="project-management__form" onSubmit={(event) => void saveTag(event)}>
                 <div className="project-management__form-row">
                   <TextInput
+                    disabled={isLocked}
                     error={fieldErrors.name}
                     id="blog-tag-name"
                     label="Tag name"
@@ -439,6 +429,7 @@ export function BlogTaxonomyManager({
                     value={editor.values.name}
                   />
                   <TextInput
+                    disabled={isLocked}
                     error={fieldErrors.slug}
                     hint="Lowercase letters and numbers separated by hyphens."
                     id="blog-tag-slug"
@@ -454,8 +445,8 @@ export function BlogTaxonomyManager({
                   />
                 </div>
                 <div className="project-management__editor-actions">
-                  <Button disabled={saving} onClick={closeEditor} type="button" variant="subtle"><X aria-hidden="true" size={15} />Cancel</Button>
-                  <Button disabled={saving} type="submit">{saving ? <LoaderCircle aria-hidden="true" className="project-management__spinner" size={15} /> : <Save aria-hidden="true" size={15} />}{saving ? "Saving…" : "Save tag"}</Button>
+                  <Button disabled={isLocked} onClick={closeEditor} type="button" variant="subtle"><X aria-hidden="true" size={15} />Cancel</Button>
+                  <Button disabled={isLocked} type="submit">{saving ? <LoaderCircle aria-hidden="true" className="project-management__spinner" size={15} /> : <Save aria-hidden="true" size={15} />}{saving ? "Saving…" : "Save tag"}</Button>
                 </div>
               </form>
             </Card>
@@ -473,8 +464,9 @@ export function BlogTaxonomyManager({
                     <p className="project-management__meta">Associated with {tag.postCount} {tag.postCount === 1 ? "post" : "posts"}</p>
                   </div>
                   <div className="project-management__category-actions">
-                    <Button aria-label={`Edit tag ${tag.name}`} disabled={saving || Boolean(deletingId)} onClick={() => openTag(tag)} size="small" variant="subtle"><Pencil aria-hidden="true" size={15} />Edit</Button>
-                    <Button aria-label={`Delete tag ${tag.name}`} disabled={saving || Boolean(deletingId)} onClick={() => {
+                    <Button aria-label={`Edit tag ${tag.name}`} disabled={isLocked} onClick={() => openTag(tag)} size="small" variant="subtle"><Pencil aria-hidden="true" size={15} />Edit</Button>
+                    <Button aria-label={`Delete tag ${tag.name}`} disabled={isLocked} onClick={() => {
+                      if (!onCanStartOperation()) return;
                       if (!canDismiss()) return;
                       setEditor(null);
                       setPendingDelete({ kind: "tag", id: tag.id, name: tag.name });
@@ -485,8 +477,8 @@ export function BlogTaxonomyManager({
                     <div aria-label={`Confirm deletion of tag ${tag.name}`} className="project-management__category-delete-confirm" role="group">
                       <div><strong>Delete {tag.name}?</strong><p>{tag.postCount > 0 ? `Its association will be removed from ${tag.postCount} ${tag.postCount === 1 ? "post" : "posts"}. No posts will be deleted.` : "No posts will be changed."}</p></div>
                       <div className="project-management__confirm-actions">
-                        <Button disabled={deletingId === tag.id} onClick={() => void deleteTaxonomy(pendingDelete)} size="small">{deletingId === tag.id ? <LoaderCircle aria-hidden="true" className="project-management__spinner" size={15} /> : <Trash2 aria-hidden="true" size={15} />}{deletingId === tag.id ? "Deleting…" : "Confirm delete"}</Button>
-                        <Button disabled={deletingId === tag.id} onClick={() => setPendingDelete(null)} size="small" variant="subtle">Cancel</Button>
+                        <Button disabled={isLocked} onClick={() => void deleteTaxonomy(pendingDelete)} size="small">{deletingId === tag.id ? <LoaderCircle aria-hidden="true" className="project-management__spinner" size={15} /> : <Trash2 aria-hidden="true" size={15} />}{deletingId === tag.id ? "Deleting…" : "Confirm delete"}</Button>
+                        <Button disabled={isLocked} onClick={() => setPendingDelete(null)} size="small" variant="subtle">Cancel</Button>
                       </div>
                     </div>
                   ) : null}

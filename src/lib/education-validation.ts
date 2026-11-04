@@ -37,6 +37,7 @@ export type EducationPatchData = Partial<EducationWriteData>;
 
 export interface EducationRecord extends EducationWriteData {
   id: string;
+  version: number;
   publishedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

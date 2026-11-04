@@ -17,9 +17,12 @@ import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TextArea, TextInput } from "@/components/ui/form-field";
+import { useAdminUnsavedNavigationProtection } from "@/components/admin/admin-unsaved-navigation-guard";
+import { EducationSaveFeedback } from "./education-save-feedback";
 import {
   createEmptyEducationFormValues,
   deleteEducationRecord,
+  educationSaveEditorTransition,
   educationToFormValues,
   loadEducationRecords,
   runEducationRequestOnce,
@@ -78,6 +81,7 @@ export function EducationManager() {
   const deletingRef = useRef(false);
 
   const editorIsDirty = Boolean(editor && hasUnsavedChanges(editor.initialValues, editor.values));
+  useAdminUnsavedNavigationProtection(editorIsDirty);
 
   const refreshRecords = useCallback(async (initialLoad = false) => {
     if (initialLoad) setIsLoading(true);
@@ -113,36 +117,6 @@ export function EducationManager() {
     return () => { active = false; };
   }, []);
 
-  useEffect(() => {
-    if (!editorIsDirty) return;
-
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    const handleNavigation = (event: MouseEvent) => {
-      if (
-        event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey ||
-        event.shiftKey || event.altKey
-      ) return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const link = target.closest("a[href]");
-      if (!link || link.getAttribute("target") === "_blank" || link.hasAttribute("download")) return;
-      if (!confirmDiscardIfDirty(true)) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    document.addEventListener("click", handleNavigation, true);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      document.removeEventListener("click", handleNavigation, true);
-    };
-  }, [editorIsDirty]);
-
   function openEditor(item: AdminEducationItem | null) {
     const values = item
       ? educationToFormValues(item)
@@ -170,6 +144,7 @@ export function EducationManager() {
     } : current);
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
     setPageError("");
+    setPageSuccess("");
   }
 
   function updateCurrent(isCurrent: boolean) {
@@ -179,6 +154,7 @@ export function EducationManager() {
     } : current);
     setFieldErrors((current) => ({ ...current, isCurrent: undefined, endDate: undefined }));
     setPageError("");
+    setPageSuccess("");
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -189,6 +165,7 @@ export function EducationManager() {
     if (Object.keys(localErrors).length > 0) {
       setFieldErrors(localErrors);
       setPageError("Please correct the highlighted fields.");
+      setPageSuccess("");
       return;
     }
 
@@ -198,7 +175,12 @@ export function EducationManager() {
       setPageError("");
       setPageSuccess("");
       try {
-        return await saveEducationRecord(submittedEditor.item?.id ?? null, submittedEditor.values);
+        return await saveEducationRecord(
+          submittedEditor.item?.id ?? null,
+          submittedEditor.values,
+          fetch,
+          submittedEditor.item?.version,
+        );
       } finally {
         setSaving(false);
       }
@@ -206,17 +188,20 @@ export function EducationManager() {
     if (!attempt.started) return;
 
     const result = attempt.value;
+    const operation = submittedEditor.item === null ? "create" : "update";
     if (!result.ok) {
+      const transition = educationSaveEditorTransition(submittedEditor, result, operation);
       setFieldErrors(result.fields ?? {});
       setPageError(result.error);
+      setPageSuccess(transition.successMessage);
       setSessionExpired(Boolean(result.unauthorized));
       return;
     }
 
-    const isNew = submittedEditor.item === null;
-    setEditor(null);
+    const transition = educationSaveEditorTransition(submittedEditor, result, operation);
+    setEditor(transition.editor);
     setFieldErrors({});
-    setPageSuccess(isNew ? "Education record was created." : "Education record was updated.");
+    setPageSuccess(transition.successMessage);
     await refreshRecords();
   }
 
@@ -238,7 +223,7 @@ export function EducationManager() {
     deletingRef.current = true;
     setDeleting(true);
     setDeleteError("");
-    const result = await deleteEducationRecord(pendingDelete.id, true);
+    const result = await deleteEducationRecord(pendingDelete.id, pendingDelete.version, true);
     deletingRef.current = false;
     setDeleting(false);
 
@@ -266,10 +251,8 @@ export function EducationManager() {
         </Button>
       </div>
 
-      {pageSuccess ? (
-        <p className="education-management__feedback education-management__feedback--success" role="status" aria-live="polite">
-          {pageSuccess}
-        </p>
+      {pageSuccess && !editor ? (
+        <EducationSaveFeedback message={pageSuccess} />
       ) : null}
       {pageError && !editor && items.length > 0 ? (
         <div className="education-management__feedback education-management__feedback--error" role="alert">
@@ -351,12 +334,13 @@ export function EducationManager() {
         </>
       )}
 
-      <Dialog
-        open={editor !== null}
-        onClose={closeEditor}
-        title={editor?.item ? "Edit education" : "Add education"}
-        description="Institution and program are required. Dates are optional; current education has no end date."
-      >
+      {editor && (
+        <Dialog
+          open={true}
+          onClose={closeEditor}
+          title={editor?.item ? "Edit education" : "Add education"}
+          description="Institution and program are required. Dates are optional; current education has no end date."
+        >
         {editor ? (
           <form aria-busy={saving} className="education-management__form" noValidate onSubmit={handleSubmit}>
             <div className="education-management__form-grid">
@@ -477,7 +461,8 @@ export function EducationManager() {
             </div>
           </form>
         ) : null}
-      </Dialog>
+        </Dialog>
+      )}
 
       <Dialog
         open={pendingDelete !== null}

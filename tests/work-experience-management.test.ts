@@ -12,10 +12,14 @@ import {
   prepareWorkExperienceUpdate,
   resolveWorkExperiencePublishedAt,
   WORK_EXPERIENCE_DESCRIPTION_MAX_LENGTH,
+  WORK_EXPERIENCE_EMPLOYMENT_TYPE_LABELS,
   type WorkExperienceMutationData,
   type WorkExperienceRecord,
 } from "../src/lib/work-experience-validation";
-import { updateWorkExperienceInTransaction } from "../src/lib/work-experience-content";
+import {
+  deleteWorkExperienceWithVersion,
+  updateWorkExperienceInTransaction,
+} from "../src/lib/work-experience-content";
 
 const VALID_ID = "11111111-1111-4111-8111-111111111111";
 const INVALID_ID = "not-a-uuid";
@@ -26,11 +30,12 @@ function validCreateInput(overrides: Record<string, unknown> = {}) {
   return {
     employer: "Example Organization",
     roleTitle: "Software Engineer",
+    employmentType: "FULL_TIME",
     location: "Remote",
     description: "Built and maintained software.",
     startDate: "2022-01-15",
     endDate: "2024-06-30",
-    isCurrent: false,
+    currentPosition: false,
     status: "DRAFT",
     sortOrder: 2,
     ...overrides,
@@ -43,6 +48,7 @@ function record(overrides: Partial<WorkExperienceRecord> = {}): WorkExperienceRe
   return {
     ...parsed.data,
     id: VALID_ID,
+    version: 1,
     publishedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -54,6 +60,7 @@ function materialize(data: WorkExperienceMutationData): WorkExperienceRecord {
   return {
     ...data,
     id: VALID_ID,
+    version: 1,
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -64,8 +71,10 @@ function request(
   method: "GET" | "POST" | "PATCH" | "DELETE",
   body?: string,
   contentType = "application/json",
+  ifMatch: string | null = method === "PATCH" ? '"1"' : null,
 ): Request {
   const headers = new Headers({ Origin: "https://example.test" });
+  if (ifMatch !== null) headers.set("If-Match", ifMatch);
   if (body !== undefined) {
     headers.set("Content-Type", contentType);
     headers.set("Content-Length", String(Buffer.byteLength(body)));
@@ -88,19 +97,39 @@ test("creates a normalized work experience record with default draft values", ()
   assert.deepEqual(parsed.data, {
     employer: "Example Organization",
     roleTitle: "Software Engineer",
+    employmentType: "FULL_TIME",
     location: "Remote",
     description: "Built software.\nWorked with a team.",
     startDate: new Date("2022-01-15T00:00:00.000Z"),
     endDate: new Date("2024-06-30T00:00:00.000Z"),
-    isCurrent: false,
+    currentPosition: false,
     status: "DRAFT",
     sortOrder: 0,
   });
 });
 
-test("requires employer and role title and bounds all text fields", () => {
+test("requires a supported employment type on create and rejects unknown or legacy field names", () => {
+  for (const employmentType of Object.keys(WORK_EXPERIENCE_EMPLOYMENT_TYPE_LABELS)) {
+    const parsed = parseCreateWorkExperience(validCreateInput({ employmentType }));
+    assert.equal(parsed.data?.employmentType, employmentType);
+    assert.equal(parsed.errors.employmentType, undefined);
+  }
+
+  assert.equal(parseCreateWorkExperience(validCreateInput({ employmentType: "VOLUNTEER" })).data, null);
+  assert.ok(parseCreateWorkExperience(validCreateInput({ employmentType: null })).errors.employmentType);
+
+  const missingInput: Record<string, unknown> = validCreateInput();
+  delete missingInput.employmentType;
+  assert.equal(parseCreateWorkExperience(missingInput).errors.employmentType, "Choose an employment type.");
+  assert.equal(parseCreateWorkExperience({ ...validCreateInput(), isCurrent: true }).invalidShape, true);
+  assert.ok(parseUpdateWorkExperience({ employmentType: "VOLUNTEER" }).errors.employmentType);
+  assert.ok(parseCreateWorkExperience(validCreateInput({ currentPosition: "true" })).errors.currentPosition);
+  assert.ok(parseUpdateWorkExperience({ currentPosition: "true" }).errors.currentPosition);
+});
+
+test("requires a company name and role title and bounds all text fields", () => {
   const missing = parseCreateWorkExperience(validCreateInput({ employer: " ", roleTitle: "" }));
-  assert.equal(missing.errors.employer, "Employer is required.");
+  assert.equal(missing.errors.employer, "Company name is required.");
   assert.equal(missing.errors.roleTitle, "Role title is required.");
 
   const tooLong = parseCreateWorkExperience(validCreateInput({
@@ -129,15 +158,15 @@ test("rejects invalid ranges, current roles with end dates, and non-current role
     startDate: "2024-07-01",
     endDate: "2024-06-30",
   })).errors.endDate);
-  assert.ok(parseCreateWorkExperience(validCreateInput({ isCurrent: true })).errors.endDate);
+  assert.ok(parseCreateWorkExperience(validCreateInput({ currentPosition: true })).errors.endDate);
   assert.ok(parseCreateWorkExperience(validCreateInput({ endDate: null })).errors.endDate);
 
   const current = parseCreateWorkExperience(validCreateInput({
-    isCurrent: true,
+    currentPosition: true,
     endDate: null,
   }));
   assert.ok(current.data);
-  assert.equal(current.data.isCurrent, true);
+  assert.equal(current.data.currentPosition, true);
   assert.equal(current.data.endDate, null);
 });
 
@@ -164,12 +193,13 @@ test("PATCH validates supplied fields and preserves omitted values when merged",
   const prepared = prepareWorkExperienceUpdate(record(), patch.data, NOW);
   assert.deepEqual(prepared.errors, {});
   assert.equal(prepared.data?.employer, "Example Organization");
+  assert.equal(prepared.data?.employmentType, "FULL_TIME");
   assert.equal(prepared.data?.description, null);
   assert.equal(prepared.data?.sortOrder, 8);
 
   const invalidTransition = prepareWorkExperienceUpdate(
-    record({ isCurrent: false, endDate: new Date("2024-06-30T00:00:00.000Z") }),
-    { isCurrent: true },
+    record({ currentPosition: false, endDate: new Date("2024-06-30T00:00:00.000Z") }),
+    { currentPosition: true },
     NOW,
   );
   assert.ok(invalidTransition.errors.endDate);
@@ -196,7 +226,7 @@ test("initializes first publication and retains publication history across statu
     NOW,
   );
   assert.equal(incompleteExisting.data, null);
-  assert.equal(incompleteExisting.errors.employer, "Employer is required.");
+  assert.equal(incompleteExisting.errors.employer, "Company name is required.");
 });
 
 test("listing authorizes before database reads and returns no-store data", async () => {
@@ -264,6 +294,8 @@ test("creation authorizes first, validates input, and safely handles persistence
   assert.equal(success.status, 201);
   assert.equal(success.headers.get("cache-control"), "no-store");
   assert.equal(saved.data?.status, "PUBLISHED");
+  assert.equal(saved.data?.employmentType, "FULL_TIME");
+  assert.equal(saved.data?.currentPosition, false);
   assert.equal(saved.data?.publishedAt, NOW);
 
   const invalid = await handleWorkExperienceCreate(
@@ -381,15 +413,18 @@ test("updates return field errors without writing invalid transitions", async ()
 
 test("transactional updates preserve omitted fields and publication history", async () => {
   let savedData: unknown;
+  let current = record({ publishedAt: FIRST_PUBLISHED_AT });
   const transaction = {
     workExperience: {
-      findUnique: async () => record({ publishedAt: FIRST_PUBLISHED_AT }),
-      update: async (args: { data: unknown }) => {
+      findUnique: async ({ select }: { select: Record<string, boolean> }) =>
+        Object.keys(select).length === 1 && select.id ? { id: current.id } : { ...current },
+      updateManyAndReturn: async (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const matches = Object.entries(args.where).every(([field, expected]) => current[field as keyof WorkExperienceRecord] === expected);
+        if (!matches) return [];
         savedData = args.data;
-        return record({
-          ...(args.data as WorkExperienceMutationData),
-          publishedAt: (args.data as WorkExperienceMutationData).publishedAt,
-        });
+        const versionUpdate = args.data.version as { increment?: number } | undefined;
+        current = { ...current, ...args.data, version: current.version + (versionUpdate?.increment ?? 0), updatedAt: NOW };
+        return [{ ...current }];
       },
     },
   } as never;
@@ -398,67 +433,262 @@ test("transactional updates preserve omitted fields and publication history", as
     transaction,
     VALID_ID,
     { status: "ARCHIVED" },
+    1,
     NOW,
   );
   assert.equal(result.kind, "updated");
-  assert.equal((savedData as WorkExperienceMutationData).employer, "Example Organization");
-  assert.equal((savedData as WorkExperienceMutationData).status, "ARCHIVED");
-  assert.equal((savedData as WorkExperienceMutationData).publishedAt, FIRST_PUBLISHED_AT);
+  assert.deepEqual(savedData, { status: "ARCHIVED", version: { increment: 1 } });
+  assert.equal(current.employer, "Example Organization");
+  assert.equal((savedData as Record<string, unknown>).status, "ARCHIVED");
+  assert.equal(current.publishedAt, FIRST_PUBLISHED_AT);
 
   let invalidUpdateCalls = 0;
   const invalidTransaction = {
     workExperience: {
       findUnique: async () => record(),
-      update: async () => {
+      updateManyAndReturn: async () => {
         invalidUpdateCalls += 1;
-        return record();
+        return [];
       },
     },
   } as never;
   const invalid = await updateWorkExperienceInTransaction(
     invalidTransaction,
     VALID_ID,
-    { isCurrent: true },
+    { currentPosition: true },
+    1,
     NOW,
   );
   assert.equal(invalid.kind, "invalid");
   assert.equal(invalidUpdateCalls, 0);
 });
 
+test("concurrent Work Experience PATCHes conflict instead of overwriting a newer update", async () => {
+  let current = record();
+  let initialReads = 0;
+  let releaseReads: (() => void) | undefined;
+  const bothRead = new Promise<void>((resolve) => { releaseReads = resolve; });
+  const transaction = {
+    workExperience: {
+      findUnique: async ({ select }: { select: Record<string, boolean> }) => {
+        const snapshot = { ...current };
+        if (initialReads < 2) {
+          initialReads += 1;
+          if (initialReads === 2) releaseReads?.();
+          await bothRead;
+          return snapshot;
+        }
+        return Object.keys(select).length === 1 && select.id
+          ? { id: current.id }
+          : { ...current };
+      },
+      updateManyAndReturn: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const matches = Object.entries(where).every(([field, expected]) => {
+          const actual = current[field as keyof WorkExperienceRecord];
+          return actual instanceof Date && expected instanceof Date
+            ? actual.getTime() === expected.getTime()
+            : actual === expected;
+        });
+        if (!matches) return [];
+        const versionUpdate = data.version as { increment?: number } | undefined;
+        current = { ...current, ...data, version: current.version + (versionUpdate?.increment ?? 0), updatedAt: NOW };
+        return [{ ...current }];
+      },
+    },
+  } as never;
+
+  const [employerUpdate, roleUpdate] = await Promise.all([
+    updateWorkExperienceInTransaction(transaction, VALID_ID, { employer: "Concurrent employer" }, 1, NOW),
+    updateWorkExperienceInTransaction(transaction, VALID_ID, { roleTitle: "Concurrent role" }, 1, NOW),
+  ]);
+
+  assert.deepEqual([employerUpdate.kind, roleUpdate.kind].sort(), ["conflict", "updated"]);
+  if (employerUpdate.kind === "updated") {
+    assert.equal(current.employer, "Concurrent employer");
+    assert.equal(current.roleTitle, "Software Engineer");
+  } else {
+    assert.equal(current.employer, "Example Organization");
+    assert.equal(current.roleTitle, "Concurrent role");
+  }
+});
+
+test("Work Experience PATCH returns a safe no-store conflict response", async () => {
+  const response = await handleWorkExperienceUpdate(
+    request(`https://example.test/api/admin/experience/${VALID_ID}`, "PATCH", JSON.stringify({ employer: "Updated" })),
+    VALID_ID,
+    { authorize: async () => null, update: async () => ({ kind: "conflict" }) },
+  );
+  assert.equal(response.status, 409);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), {
+    error: "This record changed since you opened it. Reload the latest version and reconcile your edits before saving again.",
+  });
+});
+
+test("Work Experience PATCH requires a valid If-Match version and distinguishes missing records", async () => {
+  let updateCalls = 0;
+  for (const token of [null, "1", '"0"', '"1.5"', 'W/"1"', '"2147483648"']) {
+    const response = await handleWorkExperienceUpdate(
+      request(`https://example.test/api/admin/experience/${VALID_ID}`, "PATCH", JSON.stringify({ roleTitle: "Updated" }), "application/json", token),
+      VALID_ID,
+      { authorize: async () => null, update: async () => { updateCalls += 1; return { kind: "missing" }; } },
+    );
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  assert.equal(updateCalls, 0);
+
+  const missing = await handleWorkExperienceUpdate(
+    request("https://example.test/api/admin/experience/22222222-2222-4222-8222-222222222222", "PATCH", JSON.stringify({ roleTitle: "Updated" })),
+    "22222222-2222-4222-8222-222222222222",
+    { authorize: async () => null, update: async () => ({ kind: "missing" }) },
+  );
+  assert.equal(missing.status, 404);
+});
+
+test("Work Experience version token rejects stale reverted writes and accepts sequential current versions", async () => {
+  let current = record();
+  const transaction = {
+    workExperience: {
+      findUnique: async ({ select }: { select: Record<string, boolean> }) =>
+        Object.keys(select).length === 1 && select.id ? { id: current.id } : { ...current },
+      updateManyAndReturn: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const matches = Object.entries(where).every(([field, expected]) => current[field as keyof WorkExperienceRecord] === expected);
+        if (!matches) return [];
+        const increment = data.version as { increment?: number } | undefined;
+        current = { ...current, ...data, version: current.version + (increment?.increment ?? 0), updatedAt: NOW };
+        return [{ ...current }];
+      },
+    },
+  } as never;
+  const patch = (expectedVersion: number, roleTitle: string) => handleWorkExperienceUpdate(
+    request(`https://example.test/api/admin/experience/${VALID_ID}`, "PATCH", JSON.stringify({ roleTitle }), "application/json", `"${expectedVersion}"`),
+    VALID_ID,
+    {
+      authorize: async () => null,
+      update: (id, fields, version, now) => updateWorkExperienceInTransaction(transaction, id, fields, version, now),
+      now: () => NOW,
+    },
+  );
+
+  const first = await patch(1, "Client A update");
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).experience.version, 2);
+  const stale = await patch(1, "Client B stale update");
+  assert.equal(stale.status, 409);
+  assert.equal(current.roleTitle, "Client A update");
+  assert.equal(current.version, 2);
+  const next = await patch(2, "Client A reconciled update");
+  assert.equal(next.status, 200);
+  assert.equal((await next.json()).experience.version, 3);
+
+  current = record({ roleTitle: "Original" });
+  assert.equal((await patch(1, "Temporary value")).status, 200);
+  assert.equal((await patch(2, "Original")).status, 200);
+  assert.equal(current.roleTitle, "Original");
+  assert.equal(current.version, 3);
+  assert.equal((await patch(1, "Stale value")).status, 409);
+  assert.equal(current.roleTitle, "Original");
+  assert.equal(current.version, 3);
+});
+
 test("deletion validates authorization and IDs and hides persistence errors", async () => {
   let deleteCalls = 0;
   const denied = await handleWorkExperienceDelete(
-    request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE"),
+    request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE", undefined, "application/json", '"1"'),
     VALID_ID,
     {
       authorize: async () => Response.json({ error: "Authentication is required." }, { status: 401 }),
-      delete: async () => { deleteCalls += 1; return true; },
+      delete: async () => { deleteCalls += 1; return { kind: "deleted" }; },
     },
   );
   assert.equal(denied.status, 401);
   assert.equal(deleteCalls, 0);
 
   const invalidId = await handleWorkExperienceDelete(
-    request(`https://example.test/api/admin/experience/${INVALID_ID}`, "DELETE"),
+    request(`https://example.test/api/admin/experience/${INVALID_ID}`, "DELETE", undefined, "application/json", '"1"'),
     INVALID_ID,
-    { authorize: async () => null, delete: async () => { deleteCalls += 1; return false; } },
+    { authorize: async () => null, delete: async () => { deleteCalls += 1; return { kind: "missing" }; } },
   );
   assert.equal(invalidId.status, 404);
   assert.equal(deleteCalls, 0);
 
   const missing = await handleWorkExperienceDelete(
-    request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE"),
+    request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE", undefined, "application/json", '"1"'),
     VALID_ID,
-    { authorize: async () => null, delete: async () => false },
+    { authorize: async () => null, delete: async () => ({ kind: "missing" }) },
   );
   assert.equal(missing.status, 404);
 
   const failed = await handleWorkExperienceDelete(
-    request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE"),
+    request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE", undefined, "application/json", '"1"'),
     VALID_ID,
     { authorize: async () => null, delete: async () => { throw new Error("private database detail"); } },
   );
   assert.equal(failed.status, 500);
   assert.equal(failed.headers.get("cache-control"), "no-store");
   assert.deepEqual(await failed.json(), { error: "Unable to delete work experience." });
+});
+
+test("DELETE requires a strong expected version and safely maps atomic outcomes", async () => {
+  let deleteCalls = 0;
+  for (const token of [null, "1", 'W/"1"', '"0"', '"-1"', '"1.5"', '"not-a-number"', '"2147483648"']) {
+    const response = await handleWorkExperienceDelete(
+      request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE", undefined, "application/json", token),
+      VALID_ID,
+      { authorize: async () => null, delete: async () => { deleteCalls += 1; return { kind: "missing" }; } },
+    );
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  assert.equal(deleteCalls, 0);
+
+  let received: { id: string; version: number } | undefined;
+  const deleted = await handleWorkExperienceDelete(
+    request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE", undefined, "application/json", '"3"'),
+    VALID_ID,
+    {
+      authorize: async () => null,
+      delete: async (id, version) => {
+        received = { id, version };
+        return { kind: "deleted" };
+      },
+    },
+  );
+  assert.equal(deleted.status, 200);
+  assert.deepEqual(received, { id: VALID_ID, version: 3 });
+  assert.deepEqual(await deleted.json(), { success: true });
+
+  const conflict = await handleWorkExperienceDelete(
+    request(`https://example.test/api/admin/experience/${VALID_ID}`, "DELETE", undefined, "application/json", '"1"'),
+    VALID_ID,
+    { authorize: async () => null, delete: async () => ({ kind: "conflict" }) },
+  );
+  assert.equal(conflict.status, 409);
+  assert.match((await conflict.json() as { error: string }).error, /was not deleted/u);
+});
+
+test("Work Experience atomic DELETE compares and deletes only the expected version", async () => {
+  let deleteWhere: unknown;
+  let currentVersion: number | null = 2;
+  let deleteCount = 1;
+  const transaction = {
+    $queryRaw: async () => currentVersion === null ? [] : [{ id: VALID_ID, version: currentVersion }],
+    workExperience: {
+      deleteMany: async ({ where }: { where: unknown }) => {
+        deleteWhere = where;
+        return { count: deleteCount };
+      },
+    },
+  } as never;
+
+  assert.deepEqual(await deleteWorkExperienceWithVersion(transaction, VALID_ID, 1), { kind: "conflict" });
+  assert.equal(deleteWhere, undefined);
+  assert.deepEqual(await deleteWorkExperienceWithVersion(transaction, VALID_ID, 2), { kind: "deleted" });
+  assert.deepEqual(deleteWhere, { id: VALID_ID, version: 2 });
+  currentVersion = null;
+  assert.deepEqual(await deleteWorkExperienceWithVersion(transaction, VALID_ID, 2), { kind: "missing" });
+  currentVersion = 2;
+  deleteCount = 0;
+  assert.deepEqual(await deleteWorkExperienceWithVersion(transaction, VALID_ID, 2), { kind: "conflict" });
 });

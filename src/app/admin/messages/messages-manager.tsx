@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Archive, Check, Inbox, Mail, MailOpen, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -10,37 +10,14 @@ import type {
   AdminMessageStatus,
   AdminMessageStatusFilter,
 } from "@/lib/admin-messages";
-
-interface MessageListItem {
-  id: string;
-  name: string;
-  email: string;
-  subject: string | null;
-  status: AdminMessageStatus;
-  createdAt: string;
-}
-
-interface MessageListResponse {
-  messages: MessageListItem[];
-  total: number;
-  newCount: number;
-  page: number;
-  pageCount: number;
-  pageSize: number;
-  status: AdminMessageStatusFilter;
-}
-
-interface MessageDetail extends MessageListItem {
-  message: string;
-  readAt: string | null;
-  updatedAt: string;
-}
-
-interface JsonResponse {
-  error?: unknown;
-  messages?: unknown;
-  message?: unknown;
-}
+import {
+  requestAdminMessageAction,
+  requestAdminMessageList,
+  runSingleAdminMessageMutation,
+  runSingleAdminMessageRefresh,
+  type AdminMessageDetail as MessageDetail,
+  type AdminMessageListResponse as MessageListResponse,
+} from "@/lib/admin-message-inbox-client";
 
 interface MessagesManagerProps {
   initialStatus: AdminMessageStatusFilter;
@@ -53,34 +30,6 @@ const STATUS_LABELS: Record<AdminMessageStatus, string> = {
   ARCHIVED: "Archived",
   SPAM: "Spam",
 };
-
-async function readJsonResponse(response: Response): Promise<JsonResponse> {
-  try {
-    const value: unknown = await response.json();
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? value as JsonResponse
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-async function requestMessageList(
-  status: AdminMessageStatusFilter,
-  page: string,
-): Promise<MessageListResponse> {
-  const params = new URLSearchParams({ status, page });
-  const response = await fetch(`/api/admin/messages?${params.toString()}`, {
-    cache: "no-store",
-    credentials: "same-origin",
-  });
-  const result = await readJsonResponse(response);
-
-  if (!response.ok || !Array.isArray(result.messages)) {
-    throw new Error("Unable to load messages.");
-  }
-  return result as unknown as MessageListResponse;
-}
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -101,6 +50,7 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
   const [list, setList] = useState<MessageListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [listActionError, setListActionError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [opening, setOpening] = useState(false);
@@ -108,40 +58,38 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmStatus, setConfirmStatus] = useState<"ARCHIVED" | "SPAM" | null>(null);
+  const actionPendingRef = useRef(false);
+  const refreshPendingRef = useRef<Promise<MessageListResponse> | null>(null);
+
+  const refreshMessages = useCallback(async (
+    isActive: () => boolean = () => true,
+    initialLoad = false,
+  ) => {
+    if (!initialLoad) {
+      setLoading(true);
+      setError(null);
+    }
+    await runSingleAdminMessageRefresh(refreshPendingRef, async () => {
+      return requestAdminMessageList(initialStatus, initialPage);
+    }).then(({ value }) => {
+      if (isActive()) {
+        setList(value);
+        setError(null);
+      }
+    }).catch(() => {
+      if (isActive()) setError("Messages are temporarily unavailable. Please try again.");
+    }).finally(() => {
+      if (isActive()) setLoading(false);
+    });
+  }, [initialPage, initialStatus]);
 
   useEffect(() => {
     let active = true;
-    async function load() {
-      try {
-        const nextList = await requestMessageList(initialStatus, initialPage);
-        if (!active) return;
-        setList(nextList);
-        setError(null);
-      } catch {
-        if (active) setError("Messages are temporarily unavailable. Please try again.");
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-
-    void load();
+    void Promise.resolve().then(() => refreshMessages(() => active, true));
     return () => {
       active = false;
     };
-  }, [initialPage, initialStatus]);
-
-  const refreshMessages = useCallback(async () => {
-    setLoading(true);
-    try {
-      const nextList = await requestMessageList(initialStatus, initialPage);
-      setList(nextList);
-      setError(null);
-    } catch {
-      setError("Messages are temporarily unavailable. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  }, [initialPage, initialStatus]);
+  }, [refreshMessages]);
 
   const openMessage = useCallback(async (id: string) => {
     setDetailsOpen(true);
@@ -153,20 +101,7 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
     setSuccess(null);
 
     try {
-      const response = await fetch(`/api/admin/messages/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "open" }),
-        cache: "no-store",
-        credentials: "same-origin",
-      });
-      const result = await readJsonResponse(response);
-
-      if (!response.ok || typeof result.message !== "object" || result.message === null) {
-        setActionError("This message could not be opened. Please try again.");
-        return;
-      }
-
+      const result = await requestAdminMessageAction(id, { action: "open" });
       setSelectedMessage(result.message as MessageDetail);
       await refreshMessages();
     } catch {
@@ -177,41 +112,28 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
   }, [refreshMessages]);
 
   const updateStatus = useCallback(async (status: AdminMessageStatus) => {
-    if (!selectedMessage || actionPending) return;
+    if (!selectedMessage || actionPendingRef.current) return;
 
-    setActionPending(true);
     setActionError(null);
     setSuccess(null);
-    setLoading(true);
     setConfirmStatus(null);
 
     try {
-      const response = await fetch(
-        `/api/admin/messages/${encodeURIComponent(selectedMessage.id)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status }),
-          cache: "no-store",
-          credentials: "same-origin",
-        },
+      const mutation = await runSingleAdminMessageMutation(
+        actionPendingRef,
+        () => requestAdminMessageAction(selectedMessage.id, { status }),
+        setLoading,
+        setActionPending,
       );
-      const result = await readJsonResponse(response);
+      if (mutation.kind === "busy") return;
 
-      if (!response.ok || typeof result.message !== "object" || result.message === null) {
-        setActionError("The message could not be updated. Please try again.");
-        return;
-      }
-
-      setSelectedMessage(result.message as MessageDetail);
+      setSelectedMessage(mutation.value.message as MessageDetail);
       setSuccess(`Message marked ${STATUS_LABELS[status].toLowerCase()}.`);
       await refreshMessages();
     } catch {
       setActionError("The message could not be updated. Please try again.");
-    } finally {
-      setActionPending(false);
     }
-  }, [actionPending, refreshMessages, selectedMessage]);
+  }, [refreshMessages, selectedMessage]);
 
   function closeDetails() {
     if (actionPending) return;
@@ -222,29 +144,21 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
   }
 
   async function updateStatusFromList(id: string, status: AdminMessageStatus) {
-    if (actionPending) return;
-    setActionPending(true);
-    setError(null);
+    if (actionPendingRef.current) return;
+    setListActionError(null);
     setSuccess(null);
-    setLoading(true);
     try {
-      const response = await fetch(`/api/admin/messages/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-        cache: "no-store",
-        credentials: "same-origin",
-      });
-      if (!response.ok) {
-        setError("The message could not be updated. Please try again.");
-        return;
-      }
+      const mutation = await runSingleAdminMessageMutation(
+        actionPendingRef,
+        () => requestAdminMessageAction(id, { status }),
+        setLoading,
+        setActionPending,
+      );
+      if (mutation.kind === "busy") return;
       setSuccess(`Message marked ${STATUS_LABELS[status].toLowerCase()}.`);
       await refreshMessages();
     } catch {
-      setError("The message could not be updated. Please try again.");
-    } finally {
-      setActionPending(false);
+      setListActionError("The message could not be updated. Please try again.");
     }
   }
 
@@ -262,8 +176,23 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
       ) : null}
 
       {error ? (
-        <p className="messages-inbox__feedback messages-inbox__feedback--error" role="alert">
+        <div className="messages-inbox__feedback messages-inbox__feedback--error" role="alert">
           {error}
+          <Button
+            disabled={loading}
+            onClick={() => void refreshMessages()}
+            size="small"
+            type="button"
+            variant="subtle"
+          >
+            {loading ? "Retrying…" : "Retry loading messages"}
+          </Button>
+        </div>
+      ) : null}
+
+      {listActionError ? (
+        <p className="messages-inbox__feedback messages-inbox__feedback--error" role="alert">
+          {listActionError}
         </p>
       ) : null}
 
@@ -307,11 +236,11 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
           <p className="messages-inbox__sort-note">Newest messages first</p>
         </div>
 
-        {loading ? (
+        {loading && !list ? (
           <p aria-live="polite" className="messages-inbox__loading" role="status">
             Loading messages…
           </p>
-        ) : error ? null : list && list.messages.length === 0 ? (
+        ) : !list && error ? null : list && list.messages.length === 0 ? (
           <div className="messages-inbox__empty">
             <MailOpen aria-hidden="true" size={23} />
             <h2>{list.total === 0 && currentStatus === "ALL" ? "No messages yet" : "No messages in this view"}</h2>
@@ -323,6 +252,11 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
           </div>
         ) : (
           <section aria-label="Contact messages" className="messages-inbox__list">
+            {loading ? (
+              <p aria-live="polite" className="messages-inbox__loading" role="status">
+                Refreshing messages…
+              </p>
+            ) : null}
             {list?.messages.map((message) => (
               <article
                 className={[

@@ -4,6 +4,7 @@ import { LoaderCircle, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { confirmAdminNavigationIfDirty } from "@/lib/admin-navigation-guard";
 
 export function LogoutButton() {
   const router = useRouter();
@@ -12,6 +13,7 @@ export function LogoutButton() {
 
   async function handleLogout() {
     if (isSigningOut) return;
+    if (!confirmAdminNavigationIfDirty()) return;
 
     setIsSigningOut(true);
     setError("");

@@ -1,0 +1,5 @@
+-- CreateEnum
+CREATE TYPE "EmploymentType" AS ENUM ('FULL_TIME', 'PART_TIME', 'CONTRACT', 'FREELANCE', 'INTERNSHIP', 'TEMPORARY', 'APPRENTICESHIP', 'SELF_EMPLOYED', 'OTHER');
+
+-- AlterTable
+ALTER TABLE "WorkExperience" ADD COLUMN     "employmentType" "EmploymentType" NOT NULL DEFAULT 'OTHER';

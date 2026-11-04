@@ -3,6 +3,7 @@ import "server-only";
 import { adminContentResponse, authorizeAdminContentWrite } from "@/lib/auth/admin-content";
 import { JsonRequestTooLargeError, readJsonRequest } from "@/lib/json-request";
 import { prisma } from "@/lib/prisma";
+import { expectedVersionEntityTag } from "@/lib/optimistic-version";
 import {
   adminProjectSelect,
   ProjectSkillMissingError,
@@ -85,7 +86,11 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    return adminContentResponse({ project: result.project }, 201);
+    return adminContentResponse(
+      { project: result.project },
+      201,
+      { ETag: expectedVersionEntityTag(result.project.version) },
+    );
   } catch (error) {
     const code = getPrismaErrorCode(error);
     if (error instanceof ProjectSkillMissingError) {

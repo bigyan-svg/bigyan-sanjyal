@@ -1,3 +1,5 @@
+import { logAdminAuthDiagnostic } from "./auth-diagnostics";
+
 export interface AdminContentSession {
   user: { role: string };
 }
@@ -6,10 +8,16 @@ export type AdminContentSessionValidator = (
   token: string,
 ) => Promise<AdminContentSession | null>;
 
-export function adminContentResponse(body: unknown, status: number): Response {
+export function adminContentResponse(
+  body: unknown,
+  status: number,
+  headers?: HeadersInit,
+): Response {
+  const responseHeaders = new Headers(headers);
+  responseHeaders.set("Cache-Control", "no-store");
   return Response.json(body, {
     status,
-    headers: { "Cache-Control": "no-store" },
+    headers: responseHeaders,
   });
 }
 
@@ -36,6 +44,12 @@ export async function authorizeAdminContentSessionToken(
   validateSession: AdminContentSessionValidator,
 ): Promise<Response | null> {
   if (!token) {
+    logAdminAuthDiagnostic({
+      boundary: "admin-api",
+      outcome: "rejected",
+      reason: "missing-cookie",
+      phase: "session-lookup",
+    });
     return adminContentResponse({ error: "Authentication is required." }, 401);
   }
 
@@ -46,6 +60,11 @@ export async function authorizeAdminContentSessionToken(
     }
 
     if (session.user.role !== "ADMIN" && session.user.role !== "EDITOR") {
+      logAdminAuthDiagnostic({
+        boundary: "admin-api",
+        outcome: "rejected",
+        reason: "role-not-authorized",
+      });
       return adminContentResponse(
         { error: "You are not authorized to manage site content." },
         403,

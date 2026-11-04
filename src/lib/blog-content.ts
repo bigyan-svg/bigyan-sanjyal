@@ -1,9 +1,15 @@
-import type { Prisma } from "@/generated/prisma/client";
-import type { BlogPostInputData } from "@/lib/blog-validation";
+import "server-only";
+
+import { Prisma } from "@/generated/prisma/client";
+import {
+  resolveBlogPostPublishedAt,
+  type BlogPostInputData,
+} from "@/lib/blog-validation";
 import type { AdminBlogPostItem } from "@/lib/blog-types";
 
 export const adminBlogPostSelect = {
   id: true,
+  version: true,
   title: true,
   slug: true,
   excerpt: true,
@@ -20,11 +26,36 @@ export const adminBlogPostSelect = {
   updatedAt: true,
 } satisfies Prisma.PostSelect;
 
+const blogPostAtomicUpdateSelect = {
+  id: true,
+  version: true,
+  title: true,
+  slug: true,
+  excerpt: true,
+  body: true,
+  status: true,
+  publishedAt: true,
+  categoryId: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.PostSelect;
+
 export type AdminBlogPostRecord = Prisma.PostGetPayload<{ select: typeof adminBlogPostSelect }>;
+
+export type BlogPostUpdateResult =
+  | { kind: "missing" }
+  | { kind: "conflict" }
+  | { kind: "updated"; post: AdminBlogPostRecord };
+
+export type BlogPostDeleteOutcome =
+  | { kind: "missing" }
+  | { kind: "conflict" }
+  | { kind: "deleted" };
 
 export function toAdminBlogPostItem(post: AdminBlogPostRecord): AdminBlogPostItem {
   return {
     id: post.id,
+    version: post.version,
     title: post.title,
     slug: post.slug,
     excerpt: post.excerpt,
@@ -66,6 +97,36 @@ export async function ensureBlogTagsExist(
   if (tags.length !== tagIds.length) throw new BlogTagsMissingError();
 }
 
+async function lockBlogCategoryForUpdate(
+  transaction: Prisma.TransactionClient,
+  categoryId: string | null,
+): Promise<void> {
+  if (categoryId === null) return;
+  const category = await transaction.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "PostCategory"
+    WHERE "id" = ${categoryId}::uuid
+    FOR KEY SHARE
+  `;
+  if (category.length === 0) throw new BlogCategoryMissingError();
+}
+
+async function lockBlogTagsForUpdate(
+  transaction: Prisma.TransactionClient,
+  tagIds: string[],
+): Promise<void> {
+  if (tagIds.length === 0) return;
+  const sortedIds = [...tagIds].sort();
+  const tags = await transaction.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "Tag"
+    WHERE "id" IN (${Prisma.join(sortedIds.map((tagId) => Prisma.sql`${tagId}::uuid`))})
+    ORDER BY "id"
+    FOR KEY SHARE
+  `;
+  if (tags.length !== tagIds.length) throw new BlogTagsMissingError();
+}
+
 export async function replaceBlogPostTags(
   transaction: Prisma.TransactionClient,
   postId: string,
@@ -89,6 +150,85 @@ export function blogPostScalarData(input: BlogPostInputData) {
     ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
     ...(input.status !== undefined ? { status: input.status } : {}),
   };
+}
+
+export async function updateBlogPostInTransaction(
+  transaction: Prisma.TransactionClient,
+  id: string,
+  input: BlogPostInputData,
+  expectedVersion: number,
+  now: Date,
+): Promise<BlogPostUpdateResult> {
+  const current = await transaction.post.findUnique({
+    where: { id },
+    select: { version: true, status: true, publishedAt: true },
+  });
+  if (!current) return { kind: "missing" };
+  if (current.version !== expectedVersion) return { kind: "conflict" };
+
+  try {
+    if (input.categoryId !== undefined) {
+      await lockBlogCategoryForUpdate(transaction, input.categoryId);
+    }
+    if (input.tagIds !== undefined) {
+      await lockBlogTagsForUpdate(transaction, input.tagIds);
+    }
+  } catch (error) {
+    if (!(error instanceof BlogCategoryMissingError) && !(error instanceof BlogTagsMissingError)) throw error;
+    const latest = await transaction.post.findUnique({ where: { id }, select: { version: true } });
+    if (!latest) return { kind: "missing" };
+    if (latest.version !== expectedVersion) return { kind: "conflict" };
+    throw error;
+  }
+
+  const nextStatus = input.status ?? current.status;
+  const updated = await transaction.post.updateManyAndReturn({
+    where: { id, version: expectedVersion },
+    data: {
+      ...blogPostScalarData(input),
+      status: nextStatus,
+      publishedAt: resolveBlogPostPublishedAt(current.publishedAt, nextStatus, now),
+      version: { increment: 1 },
+    },
+    select: blogPostAtomicUpdateSelect,
+  });
+
+  if (updated.length === 0) {
+    const stillExists = await transaction.post.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    return stillExists ? { kind: "conflict" } : { kind: "missing" };
+  }
+
+  // Association changes are committed only with the successful versioned row update.
+  if (input.tagIds !== undefined) {
+    await replaceBlogPostTags(transaction, id, input.tagIds);
+  }
+
+  const postWithTaxonomy = await transaction.post.findUniqueOrThrow({
+    where: { id },
+    select: adminBlogPostSelect,
+  });
+  const post = { ...postWithTaxonomy, ...updated[0]! };
+  return { kind: "updated", post };
+}
+
+export async function deleteBlogPostWithVersion(
+  transaction: Prisma.TransactionClient,
+  id: string,
+  expectedVersion: number,
+): Promise<BlogPostDeleteOutcome> {
+  const deleted = await transaction.post.deleteMany({
+    where: { id, version: expectedVersion },
+  });
+  if (deleted.count === 1) return { kind: "deleted" };
+
+  const existing = await transaction.post.findUnique({
+    where: { id },
+    select: { id: true },
+  });
+  return existing ? { kind: "conflict" } : { kind: "missing" };
 }
 
 export function getBlogPostPrismaErrorCode(error: unknown): string | null {

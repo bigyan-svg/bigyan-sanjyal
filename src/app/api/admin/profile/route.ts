@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { hasTrustedRequestOrigin } from "@/lib/auth/origin";
 import { validateAdminSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
-import { publicSiteProfileSelect } from "@/lib/site-profile";
+import { siteProfileFieldsSelect } from "@/lib/site-profile";
 
 const ADMIN_SESSION_COOKIE_NAME = "admin_session";
 const MAX_BODY_BYTES = 64 * 1024;
@@ -309,7 +309,7 @@ export async function PUT(request: Request): Promise<Response> {
 
     const profile = await prisma.siteProfile.findUnique({
       where: { id: 1 },
-      select: publicSiteProfileSelect,
+      select: siteProfileFieldsSelect,
     });
 
     if (!profile) {

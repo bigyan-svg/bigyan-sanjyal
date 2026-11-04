@@ -3,11 +3,12 @@ import type { Prisma } from "@/generated/prisma/client";
 const publicExperienceSelect = {
   employer: true,
   roleTitle: true,
+  employmentType: true,
   location: true,
   description: true,
   startDate: true,
   endDate: true,
-  isCurrent: true,
+  currentPosition: true,
 } satisfies Prisma.WorkExperienceSelect;
 
 const publishedExperienceWhere = {

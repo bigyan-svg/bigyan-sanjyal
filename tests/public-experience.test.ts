@@ -7,16 +7,18 @@ import {
   type PublicWorkExperience,
 } from "../src/lib/public-experience-query";
 import { formatWorkExperienceDateRange } from "../src/lib/public-experience-format";
+import { workExperienceEmploymentTypeLabel } from "../src/lib/work-experience-validation";
 
 function experience(overrides: Partial<PublicWorkExperience> = {}): PublicWorkExperience {
   return {
     employer: "Example Organization",
     roleTitle: "Software Engineer",
+    employmentType: "FULL_TIME",
     location: "Remote",
     description: "Maintained software.",
     startDate: new Date("2022-01-15T00:00:00.000Z"),
     endDate: new Date("2024-06-30T00:00:00.000Z"),
-    isCurrent: false,
+    currentPosition: false,
     ...overrides,
   };
 }
@@ -55,7 +57,7 @@ test("public query uses deterministic sort order and selects only displayed fiel
     { id: "asc" },
   ]);
   assert.deepEqual(Object.keys(publishedExperienceQuery.select).sort(), [
-    "description", "employer", "endDate", "isCurrent", "location", "roleTitle", "startDate",
+    "currentPosition", "description", "employer", "employmentType", "endDate", "location", "roleTitle", "startDate",
   ]);
   assert.equal("id" in publishedExperienceQuery.select, false);
   assert.equal("status" in publishedExperienceQuery.select, false);
@@ -79,19 +81,32 @@ test("date formatting covers current, historical, and absent dates", () => {
   const current = formatWorkExperienceDateRange({
     startDate: new Date("2024-01-01T00:00:00.000Z"),
     endDate: null,
-    isCurrent: true,
+    currentPosition: true,
   });
   assert.equal(current, "January 2024 – Present");
 
   const historical = formatWorkExperienceDateRange({
     startDate: new Date("2022-01-01T00:00:00.000Z"),
     endDate: new Date("2023-12-01T00:00:00.000Z"),
-    isCurrent: false,
+    currentPosition: false,
   });
   assert.equal(historical, "January 2022 – December 2023");
 
-  const missing = formatWorkExperienceDateRange({ startDate: null, endDate: null, isCurrent: false });
+  const missing = formatWorkExperienceDateRange({ startDate: null, endDate: null, currentPosition: false });
   assert.equal(missing, "Date not provided – Date not provided");
+});
+
+test("employment type labels are readable for every allowed public value", () => {
+  assert.deepEqual(
+    [
+      "FULL_TIME", "PART_TIME", "CONTRACT", "FREELANCE", "INTERNSHIP",
+      "TEMPORARY", "APPRENTICESHIP", "SELF_EMPLOYED", "OTHER",
+    ].map((type) => workExperienceEmploymentTypeLabel(type as Parameters<typeof workExperienceEmploymentTypeLabel>[0])),
+    [
+      "Full-time", "Part-time", "Contract", "Freelance", "Internship",
+      "Temporary", "Apprenticeship", "Self-employed", "Other",
+    ],
+  );
 });
 
 test("optional public location and description stay absent when not supplied", () => {

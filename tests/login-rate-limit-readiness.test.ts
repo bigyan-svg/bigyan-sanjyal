@@ -1,0 +1,518 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  ADMIN_RATE_LIMIT_POLICIES,
+  type AdminLoginRateLimitBackend,
+  createAdminLoginEmailPseudonym,
+  checkAdminLoginRateLimit,
+  checkAdminPasswordChangeRateLimit,
+  checkContactSubmissionRateLimit,
+  createRateLimitPseudonym,
+  getTrustedClientIp,
+} from "../src/lib/auth/login-rate-limit";
+import { getRateLimitReadiness } from "../src/lib/auth/rate-limit-readiness";
+import { createLoginRateLimitedResponse } from "../src/lib/auth/login-rate-limit-response";
+
+const validProductionEnvironment = {
+  NODE_ENV: "production",
+  VERCEL: "1",
+  UPSTASH_REDIS_REST_URL: "https://example.upstash.io",
+  UPSTASH_REDIS_REST_TOKEN: "test-token-not-used-for-network-access",
+  ADMIN_RATE_LIMIT_HMAC_SECRET: "a-test-only-secret-that-is-at-least-32-bytes",
+};
+
+function request(headers: Record<string, string> = {}): Request {
+  return new Request("https://example.test/api/contact", { headers });
+}
+
+function saveEnvironment(names: readonly string[]) {
+  const environment = process.env as Record<string, string | undefined>;
+  const previous = new Map(names.map((name) => [name, environment[name]]));
+
+  return () => {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete environment[name];
+      else environment[name] = value;
+    }
+  };
+}
+
+function makeRateLimitBackend(
+  onLimit: (limiter: string, identifier: string) => Promise<{
+    success: boolean;
+    reset: number;
+    reason?: string;
+  }> = async () => ({ success: true, reset: Date.now() + 60_000 }),
+  calls: Record<string, string[]> = {},
+): AdminLoginRateLimitBackend {
+  const limiter = (name: string) => ({
+    limit(identifier: string) {
+      calls[name] ??= [];
+      calls[name].push(identifier);
+      return onLimit(name, identifier);
+    },
+  });
+
+  return {
+    hmacSecret: "test-only-secret-with-at-least-32-bytes",
+    ipFifteenMinutes: limiter("ipFifteenMinutes"),
+    ipOneHour: limiter("ipOneHour"),
+    emailIpFifteenMinutes: limiter("emailIpFifteenMinutes"),
+    emailFifteenMinutes: limiter("emailFifteenMinutes"),
+    emailOneHour: limiter("emailOneHour"),
+  };
+}
+
+function trustedLoginRequest(ip: string): Request {
+  return new Request("https://example.test/api/auth/login", {
+    headers: { "x-vercel-forwarded-for": ip },
+  });
+}
+
+test("uses only the valid Vercel-provided client IP header on Vercel", () => {
+  assert.equal(
+    getTrustedClientIp(
+      request({ "x-vercel-forwarded-for": "203.0.113.24" }),
+      validProductionEnvironment,
+    ),
+    "203.0.113.24",
+  );
+  assert.equal(
+    getTrustedClientIp(
+      request({ "x-vercel-forwarded-for": "2001:db8::5" }),
+      validProductionEnvironment,
+    ),
+    "2001:db8::5",
+  );
+});
+
+test("fails closed when Vercel's trusted client IP header is missing or invalid", () => {
+  assert.equal(
+    getTrustedClientIp(
+      request({ "x-forwarded-for": "203.0.113.24" }),
+      validProductionEnvironment,
+    ),
+    null,
+  );
+  assert.equal(
+    getTrustedClientIp(
+      request({ "x-vercel-forwarded-for": "203.0.113.24, 198.51.100.2" }),
+      validProductionEnvironment,
+    ),
+    null,
+  );
+  assert.equal(
+    getTrustedClientIp(
+      request({ "x-vercel-forwarded-for": "not-an-ip" }),
+      validProductionEnvironment,
+    ),
+    null,
+  );
+});
+
+test("rejects arbitrary client-supplied IP headers", () => {
+  const arbitraryHeaders = request({
+    "x-forwarded-for": "203.0.113.24",
+    "x-real-ip": "203.0.113.25",
+    "cf-connecting-ip": "203.0.113.26",
+    "true-client-ip": "203.0.113.27",
+  });
+
+  assert.equal(
+    getTrustedClientIp(arbitraryHeaders, {
+      NODE_ENV: "production",
+      VERCEL: "1",
+    }),
+    null,
+  );
+  assert.equal(
+    getTrustedClientIp(arbitraryHeaders, {
+      NODE_ENV: "production",
+      VERCEL: "0",
+    }),
+    null,
+  );
+  assert.equal(
+    getTrustedClientIp(
+      request({ "x-vercel-forwarded-for": "203.0.113.28" }),
+      { NODE_ENV: "production", VERCEL: "0" },
+    ),
+    null,
+  );
+});
+
+test("non-Vercel production hosts have no trusted IP source", () => {
+  assert.equal(
+    getTrustedClientIp(
+      request({ "x-forwarded-for": "203.0.113.24" }),
+      { NODE_ENV: "production" },
+    ),
+    null,
+  );
+  const readiness = getRateLimitReadiness({ NODE_ENV: "production" });
+  assert.equal(readiness.trustedClientIpPolicy, "unavailable");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("unsupported-production-proxy"));
+});
+
+test("local development uses its explicit opt-in identity and production does not", () => {
+  assert.equal(
+    getTrustedClientIp(request(), {
+      NODE_ENV: "development",
+      ENABLE_LOCAL_LOGIN_RATE_LIMIT: "true",
+    }),
+    "local-development",
+  );
+  assert.equal(
+    getTrustedClientIp(request(), {
+      NODE_ENV: "production",
+      ENABLE_LOCAL_LOGIN_RATE_LIMIT: "true",
+    }),
+    null,
+  );
+});
+
+test("readiness identifies missing Redis configuration without exposing values", () => {
+  const readiness = getRateLimitReadiness({
+    NODE_ENV: "production",
+    VERCEL: "1",
+  });
+
+  assert.equal(readiness.redisUrlConfigured, false);
+  assert.equal(readiness.redisTokenConfigured, false);
+  assert.equal(readiness.redisConfigurationReady, false);
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("upstash-url-missing"));
+  assert.ok(readiness.issues.includes("upstash-token-missing"));
+  const diagnostic = JSON.stringify(readiness);
+  assert.equal(diagnostic.includes("UPSTASH_REDIS_REST_TOKEN"), false);
+  assert.equal(diagnostic.includes("https://example.upstash.io"), false);
+  assert.equal(diagnostic.includes(validProductionEnvironment.UPSTASH_REDIS_REST_TOKEN), false);
+  assert.equal(
+    diagnostic.includes(validProductionEnvironment.ADMIN_RATE_LIMIT_HMAC_SECRET),
+    false,
+  );
+});
+
+test("readiness rejects malformed Redis URLs and missing or weak HMAC secrets", () => {
+  const missingSecret = getRateLimitReadiness({
+    ...validProductionEnvironment,
+    ADMIN_RATE_LIMIT_HMAC_SECRET: undefined,
+  });
+  assert.equal(missingSecret.hmacSecretConfigured, false);
+  assert.equal(missingSecret.hmacSecretStrong, false);
+  assert.ok(missingSecret.issues.includes("hmac-secret-missing"));
+
+  const weakSecret = getRateLimitReadiness({
+    ...validProductionEnvironment,
+    ADMIN_RATE_LIMIT_HMAC_SECRET: "short-secret",
+  });
+  assert.equal(weakSecret.hmacSecretStrong, false);
+  assert.ok(weakSecret.issues.includes("hmac-secret-too-short"));
+
+  const malformedUrl = getRateLimitReadiness({
+    ...validProductionEnvironment,
+    UPSTASH_REDIS_REST_URL: "not-a-url",
+  });
+  assert.equal(malformedUrl.redisUrlConfigured, true);
+  assert.equal(malformedUrl.redisUrlValid, false);
+  assert.ok(malformedUrl.issues.includes("upstash-url-invalid"));
+});
+
+test("configured direct Vercel and Upstash settings report ready", () => {
+  const readiness = getRateLimitReadiness(validProductionEnvironment);
+
+  assert.equal(readiness.trustedClientIpPolicy, "vercel-edge-direct-ingress-only");
+  assert.equal(readiness.redisConfigurationReady, true);
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.issues, []);
+});
+
+test("login, password-change, and contact limiters fail closed without Upstash configuration", async () => {
+  const restore = saveEnvironment([
+    "NODE_ENV",
+    "VERCEL",
+    "ENABLE_LOCAL_LOGIN_RATE_LIMIT",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN",
+    "ADMIN_RATE_LIMIT_HMAC_SECRET",
+  ]);
+
+  const environment = process.env as Record<string, string | undefined>;
+  environment.NODE_ENV = "production";
+  environment.VERCEL = "1";
+  delete environment.ENABLE_LOCAL_LOGIN_RATE_LIMIT;
+  delete environment.UPSTASH_REDIS_REST_URL;
+  delete environment.UPSTASH_REDIS_REST_TOKEN;
+  delete environment.ADMIN_RATE_LIMIT_HMAC_SECRET;
+
+  try {
+    const trustedRequest = request({ "x-vercel-forwarded-for": "203.0.113.24" });
+    assert.deepEqual(await checkAdminLoginRateLimit(trustedRequest, "admin@example.test"), {
+      status: "unavailable",
+    });
+    assert.deepEqual(await checkAdminPasswordChangeRateLimit(trustedRequest, "test-admin-id"), {
+      status: "unavailable",
+    });
+    assert.deepEqual(await checkContactSubmissionRateLimit(trustedRequest), {
+      status: "unavailable",
+    });
+  } finally {
+    restore();
+  }
+});
+
+test("rate-limit identifiers are stable keyed pseudonyms and scope separated", () => {
+  const ip = "203.0.113.24";
+  const secret = "test-only-secret-with-at-least-32-bytes";
+  const first = createRateLimitPseudonym(secret, "ip", ip);
+
+  assert.equal(first, createRateLimitPseudonym(secret, "ip", ip));
+  assert.notEqual(first, createRateLimitPseudonym(secret, "contact-ip", ip));
+  assert.notEqual(first, createRateLimitPseudonym(`${secret}-different`, "ip", ip));
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.notEqual(first, ip);
+});
+
+test("account-scoped login pseudonyms normalize email and omit client IP", () => {
+  const secret = "test-only-secret-with-at-least-32-bytes";
+  const normalized = createAdminLoginEmailPseudonym(secret, "admin@example.test");
+  assert.equal(
+    normalized,
+    createAdminLoginEmailPseudonym(secret, " ADMIN@example.test "),
+  );
+  assert.notEqual(normalized, "admin@example.test");
+  assert.notEqual(
+    normalized,
+    createRateLimitPseudonym(
+      secret,
+      "email-ip",
+      ["admin@example.test", "203.0.113.24"].join("\0"),
+    ),
+  );
+});
+
+test("login account buckets are shared across IPs and isolated between emails", async () => {
+  const restore = saveEnvironment(["NODE_ENV", "VERCEL"]);
+  const environment = process.env as Record<string, string | undefined>;
+  environment.NODE_ENV = "production";
+  environment.VERCEL = "1";
+  const calls: Record<string, string[]> = {};
+  const backend = makeRateLimitBackend(undefined, calls);
+
+  try {
+    await checkAdminLoginRateLimit(
+      trustedLoginRequest("203.0.113.1"),
+      "Admin@example.test",
+      backend,
+    );
+    await checkAdminLoginRateLimit(
+      trustedLoginRequest("203.0.113.2"),
+      " admin@EXAMPLE.test ",
+      backend,
+    );
+    await checkAdminLoginRateLimit(
+      trustedLoginRequest("203.0.113.3"),
+      "other@example.test",
+      backend,
+    );
+
+    assert.equal(calls.emailFifteenMinutes[0], calls.emailFifteenMinutes[1]);
+    assert.equal(calls.emailOneHour[0], calls.emailOneHour[1]);
+    assert.notEqual(calls.emailFifteenMinutes[0], calls.emailFifteenMinutes[2]);
+    assert.notEqual(calls.emailOneHour[0], calls.emailOneHour[2]);
+    assert.notEqual(calls.ipFifteenMinutes[0], calls.ipFifteenMinutes[1]);
+    assert.notEqual(calls.emailIpFifteenMinutes[0], calls.emailIpFifteenMinutes[1]);
+    assert.ok(
+      Object.values(calls).flat().every((identifier) => /^[a-f0-9]{64}$/u.test(identifier)),
+    );
+    assert.equal(
+      Object.values(calls).flat().some((identifier) => identifier.includes("@")),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("account buckets enforce the configured 15-minute and hourly boundaries", async () => {
+  const restore = saveEnvironment(["NODE_ENV", "VERCEL"]);
+  const environment = process.env as Record<string, string | undefined>;
+  environment.NODE_ENV = "production";
+  environment.VERCEL = "1";
+
+  const runAttempts = async (
+    targetLimiter: "emailFifteenMinutes" | "emailOneHour",
+    limit: number,
+  ) => {
+    const counters = new Map<string, number>();
+    const backend = makeRateLimitBackend(async (limiterName, identifier) => {
+      if (limiterName !== targetLimiter) {
+        return { success: true, reset: Date.now() + 60_000 };
+      }
+
+      const count = (counters.get(identifier) ?? 0) + 1;
+      counters.set(identifier, count);
+      return { success: count <= limit, reset: Date.now() + 60_000 };
+    });
+
+    for (let attempt = 1; attempt <= limit; attempt += 1) {
+      assert.deepEqual(
+        await checkAdminLoginRateLimit(
+          trustedLoginRequest(`203.0.113.${attempt}`),
+          "shared@example.test",
+          backend,
+        ),
+        { status: "allowed" },
+      );
+    }
+
+    const blocked = await checkAdminLoginRateLimit(
+      trustedLoginRequest("203.0.114.1"),
+      "shared@example.test",
+      backend,
+    );
+    assert.equal(blocked.status, "limited");
+    if (blocked.status === "limited") {
+      assert.ok(blocked.retryAfterSeconds > 0);
+    }
+  };
+
+  try {
+    await runAttempts(
+      "emailFifteenMinutes",
+      ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailFifteenMinutes.limit,
+    );
+    await runAttempts(
+      "emailOneHour",
+      ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailOneHour.limit,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("login rate limiting fails closed for Redis errors and timeout decisions", async () => {
+  const restore = saveEnvironment(["NODE_ENV", "VERCEL"]);
+  const environment = process.env as Record<string, string | undefined>;
+  environment.NODE_ENV = "production";
+  environment.VERCEL = "1";
+
+  try {
+    const rejectingBackend = makeRateLimitBackend(async (limiterName) => {
+      if (limiterName === "emailFifteenMinutes") {
+        throw new Error("private Redis failure");
+      }
+      return { success: true, reset: Date.now() + 60_000 };
+    });
+    assert.deepEqual(
+      await checkAdminLoginRateLimit(
+        trustedLoginRequest("203.0.113.9"),
+        "admin@example.test",
+        rejectingBackend,
+      ),
+      { status: "unavailable" },
+    );
+
+    const timeoutBackend = makeRateLimitBackend(async (limiterName) => ({
+      success: true,
+      reset: Date.now() + 60_000,
+      ...(limiterName === "emailOneHour" ? { reason: "timeout" } : {}),
+    }));
+    assert.deepEqual(
+      await checkAdminLoginRateLimit(
+        trustedLoginRequest("203.0.113.9"),
+        "admin@example.test",
+        timeoutBackend,
+      ),
+      { status: "unavailable" },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("existing IP and email-plus-IP login buckets still enforce limits", async () => {
+  const restore = saveEnvironment(["NODE_ENV", "VERCEL"]);
+  const environment = process.env as Record<string, string | undefined>;
+  environment.NODE_ENV = "production";
+  environment.VERCEL = "1";
+
+  try {
+    for (const limitedLimiter of ["ipFifteenMinutes", "emailIpFifteenMinutes"]) {
+      const calls: Record<string, string[]> = {};
+      const backend = makeRateLimitBackend(async (limiterName) => ({
+        success: limiterName !== limitedLimiter,
+        reset: Date.now() + 60_000,
+      }), calls);
+
+      assert.equal(
+        (await checkAdminLoginRateLimit(
+          trustedLoginRequest("203.0.113.11"),
+          "admin@example.test",
+          backend,
+        )).status,
+        "limited",
+      );
+      assert.match(calls[limitedLimiter][0], /^[a-f0-9]{64}$/u);
+    }
+  } finally {
+    restore();
+  }
+});
+
+test("login throttling returns the generic no-store 429 response", async () => {
+  const response = createLoginRateLimitedResponse(45);
+
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "45");
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), {
+    error: "Too many sign-in attempts. Please try again later.",
+  });
+});
+
+test("login rate-limit thresholds, windows, and namespaces are explicit", () => {
+  assert.deepEqual(ADMIN_RATE_LIMIT_POLICIES, {
+    adminLoginIpFifteenMinutes: {
+      limit: 10,
+      window: "15 m",
+      prefix: "admin-login:ip:15m",
+    },
+    adminLoginIpOneHour: {
+      limit: 30,
+      window: "1 h",
+      prefix: "admin-login:ip:1h",
+    },
+    adminLoginEmailIpFifteenMinutes: {
+      limit: 10,
+      window: "15 m",
+      prefix: "admin-login:email-ip:15m",
+    },
+    adminLoginEmailFifteenMinutes: {
+      limit: 10,
+      window: "15 m",
+      prefix: "admin-login:email:15m",
+    },
+    adminLoginEmailOneHour: {
+      limit: 30,
+      window: "1 h",
+      prefix: "admin-login:email:1h",
+    },
+    adminPasswordChangeIpFifteenMinutes: {
+      limit: 5,
+      window: "15 m",
+      prefix: "admin-password-change:admin-ip:15m",
+    },
+    contactIpFifteenMinutes: {
+      limit: 5,
+      window: "15 m",
+      prefix: "contact-submit:ip:15m",
+    },
+    contactIpOneHour: {
+      limit: 20,
+      window: "1 h",
+      prefix: "contact-submit:ip:1h",
+    },
+  });
+});

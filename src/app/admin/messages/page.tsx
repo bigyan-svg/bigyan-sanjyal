@@ -4,10 +4,8 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Container } from "@/components/ui/container";
 import { validateAdminSession } from "@/lib/auth/session";
 import type { AdminMessageStatusFilter } from "@/lib/admin-messages";
-import { AdminSidebar } from "../admin-sidebar";
 import { MessagesManager } from "./messages-manager";
 
 export const metadata: Metadata = {
@@ -49,45 +47,34 @@ async function AdminMessagesContent({ searchParams }: AdminMessagesPageProps) {
   const initialPage = /^[1-9]\d{0,8}$/u.test(requestedPage) ? requestedPage : "1";
 
   return (
-    <section aria-labelledby="messages-management-title" className="admin-dashboard">
-      <Container className="admin-dashboard__container">
-        <div className="admin-dashboard__shell">
-          <AdminSidebar
-            activeHref="/admin/messages"
-            email={session.user.email}
-            role={session.user.role}
-          />
-          <div className="admin-dashboard__main">
-            <header className="admin-dashboard__topbar">
-              <div>
-                <p className="eyebrow">Workspace / Messages</p>
-                <h1 id="messages-management-title">Messages inbox</h1>
-                <p className="admin-dashboard__welcome-detail">
-                  Read and organize messages submitted through the Contact page.
-                </p>
-              </div>
-              <span className="admin-dashboard__session-status">
-                <span aria-hidden="true" className="status-dot" />
-                Signed in
-              </span>
-            </header>
-
-            <MessagesManager
-              initialPage={initialPage}
-              initialStatus={initialStatus}
-              key={`${initialStatus}:${initialPage}`}
-            />
-          </div>
+    <>
+      <header className="admin-dashboard__topbar">
+        <div>
+          <p className="eyebrow">Workspace / Messages</p>
+          <h1 id="messages-management-title">Messages inbox</h1>
+          <p className="admin-dashboard__welcome-detail">
+            Read and organize messages submitted through the Contact page.
+          </p>
         </div>
-      </Container>
-    </section>
+        <span className="admin-dashboard__session-status">
+          <span aria-hidden="true" className="status-dot" />
+          Signed in
+        </span>
+      </header>
+
+      <MessagesManager
+        initialPage={initialPage}
+        initialStatus={initialStatus}
+        key={`${initialStatus}:${initialPage}`}
+      />
+    </>
   );
 }
 
 function MessagesPageLoading() {
   return (
-    <section aria-busy="true" className="admin-dashboard__loading-page">
+    <div aria-busy="true" className="admin-dashboard__loading-page">
       <p className="eyebrow" role="status">Loading messages inbox…</p>
-    </section>
+    </div>
   );
 }

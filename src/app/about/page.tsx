@@ -7,6 +7,7 @@ import { Container } from "@/components/ui/container";
 import { PageIntro } from "@/components/ui/page-intro";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { getProfileInitials, getPublicSiteProfile } from "@/lib/site-profile";
+import { ProfileSocialLinks } from "./profile-social-links";
 
 export const metadata: Metadata = {
   title: "About",
@@ -78,6 +79,7 @@ async function AboutPageContent() {
                 <p className="profile-card__biography">
                   {profile?.biography ?? "A full biography has not been added yet."}
                 </p>
+                <ProfileSocialLinks links={profile?.socialLinks ?? []} />
               </div>
             </Card>
 

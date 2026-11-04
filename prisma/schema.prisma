@@ -20,6 +20,18 @@ enum ProjectLinkType {
   OTHER
 }
 
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  FREELANCE
+  INTERNSHIP
+  TEMPORARY
+  APPRENTICESHIP
+  SELF_EMPLOYED
+  OTHER
+}
+
 enum ContactMessageStatus {
   NEW
   READ
@@ -114,6 +126,7 @@ model Project {
   featured    Boolean          @default(false)
   publishedAt DateTime?        @db.Timestamptz(6)
   sortOrder   Int              @default(0)
+  version     Int              @default(1)
   createdAt   DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime         @default(now()) @updatedAt @db.Timestamptz(6)
   category    ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull, onUpdate: Cascade)
@@ -185,6 +198,7 @@ model Post {
   body        String        @db.Text
   status      ContentStatus @default(DRAFT)
   publishedAt DateTime?     @db.Timestamptz(6)
+  version     Int           @default(1)
   createdAt   DateTime      @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime      @default(now()) @updatedAt @db.Timestamptz(6)
   category    PostCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull, onUpdate: Cascade)
@@ -225,6 +239,7 @@ model Education {
   status       ContentStatus @default(DRAFT)
   publishedAt  DateTime?     @db.Timestamptz(6)
   sortOrder    Int           @default(0)
+  version      Int           @default(1)
   createdAt    DateTime      @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime      @default(now()) @updatedAt @db.Timestamptz(6)
 
@@ -232,19 +247,21 @@ model Education {
 }
 
 model WorkExperience {
-  id          String        @id @default(uuid()) @db.Uuid
-  employer    String        @db.VarChar(200)
-  roleTitle   String        @db.VarChar(160)
-  location    String?       @db.VarChar(160)
-  description String?       @db.Text
-  startDate   DateTime?     @db.Date
-  endDate     DateTime?     @db.Date
-  isCurrent   Boolean       @default(false)
-  status      ContentStatus @default(DRAFT)
-  publishedAt DateTime?     @db.Timestamptz(6)
-  sortOrder   Int           @default(0)
-  createdAt   DateTime      @default(now()) @db.Timestamptz(6)
-  updatedAt   DateTime      @default(now()) @updatedAt @db.Timestamptz(6)
+  id              String         @id @default(uuid()) @db.Uuid
+  employer        String         @db.VarChar(200)
+  roleTitle       String         @db.VarChar(160)
+  employmentType  EmploymentType @default(OTHER)
+  location        String?        @db.VarChar(160)
+  description     String?        @db.Text
+  startDate       DateTime?      @db.Date
+  endDate         DateTime?      @db.Date
+  currentPosition Boolean        @default(false) @map("isCurrent")
+  status          ContentStatus  @default(DRAFT)
+  publishedAt     DateTime?      @db.Timestamptz(6)
+  sortOrder       Int            @default(0)
+  version         Int            @default(1)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime       @default(now()) @updatedAt @db.Timestamptz(6)
 
   @@index([status, publishedAt, sortOrder])
 }

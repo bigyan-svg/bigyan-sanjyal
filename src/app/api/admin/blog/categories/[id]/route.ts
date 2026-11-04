@@ -77,7 +77,11 @@ export async function DELETE(
   try {
     const deleted = await prisma.$transaction((transaction) => deleteBlogCategoryWithPosts(transaction, id));
     if (!deleted) return adminContentResponse({ error: "Category not found." }, 404);
-    return adminContentResponse({ success: true, detachedPostCount: deleted.detachedPostCount }, 200);
+    return adminContentResponse({
+      success: true,
+      detachedPostCount: deleted.detachedPostCount,
+      affectedPosts: deleted.affectedPosts,
+    }, 200);
   } catch (error) {
     const code = getBlogTaxonomyPrismaErrorCode(error);
     if (code === "P2025") return adminContentResponse({ error: "Category not found." }, 404);

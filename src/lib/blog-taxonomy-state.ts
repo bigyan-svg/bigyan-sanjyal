@@ -1,4 +1,4 @@
-import type { AdminBlogCategory, AdminBlogPostItem, AdminBlogTag } from "@/lib/blog-types";
+import type { AffectedBlogPostVersion, AdminBlogCategory, AdminBlogPostItem, AdminBlogTag } from "@/lib/blog-types";
 
 export function upsertAdminBlogCategory(
   categories: AdminBlogCategory[],
@@ -25,10 +25,19 @@ export function syncBlogPostCategoryLabel(
 export function removeBlogCategoryFromPosts(
   posts: AdminBlogPostItem[],
   categoryId: string,
+  affectedPosts: AffectedBlogPostVersion[],
 ): AdminBlogPostItem[] {
-  return posts.map((post) => post.categoryId === categoryId
-    ? { ...post, categoryId: null, category: null }
-    : post);
+  const versions = new Map(affectedPosts.map(({ id, version }) => [id, version]));
+  return posts.map((post) => {
+    const version = versions.get(post.id);
+    const detached = post.categoryId === categoryId;
+    if (version === undefined && !detached) return post;
+    return {
+      ...post,
+      ...(version === undefined ? {} : { version }),
+      ...(detached ? { categoryId: null, category: null } : {}),
+    };
+  });
 }
 
 export function syncBlogPostTagLabel(posts: AdminBlogPostItem[], tag: AdminBlogTag): AdminBlogPostItem[] {
@@ -38,8 +47,22 @@ export function syncBlogPostTagLabel(posts: AdminBlogPostItem[], tag: AdminBlogT
   }));
 }
 
-export function removeBlogTagFromPosts(posts: AdminBlogPostItem[], tagId: string): AdminBlogPostItem[] {
-  return posts.map((post) => ({ ...post, tags: post.tags.filter((tag) => tag.id !== tagId) }));
+export function removeBlogTagFromPosts(
+  posts: AdminBlogPostItem[],
+  tagId: string,
+  affectedPosts: AffectedBlogPostVersion[],
+): AdminBlogPostItem[] {
+  const versions = new Map(affectedPosts.map(({ id, version }) => [id, version]));
+  return posts.map((post) => {
+    const version = versions.get(post.id);
+    const tags = post.tags.filter((tag) => tag.id !== tagId);
+    if (version === undefined && tags.length === post.tags.length) return post;
+    return {
+      ...post,
+      ...(version === undefined ? {} : { version }),
+      tags,
+    };
+  });
 }
 
 export function getBlogPostEditorRelations(post: AdminBlogPostItem | null): {

@@ -8,6 +8,7 @@ import { PageIntro } from "@/components/ui/page-intro";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { formatWorkExperienceDateRange } from "@/lib/public-experience-format";
 import { getPublishedWorkExperiences } from "@/lib/public-experience";
+import { workExperienceEmploymentTypeLabel } from "@/lib/work-experience-validation";
 
 export const metadata: Metadata = {
   title: "Work Experience",
@@ -69,7 +70,7 @@ async function PublishedExperience() {
                         <h3>{experience.roleTitle}</h3>
                         <p className="public-experience__employer">{experience.employer}</p>
                       </div>
-                      {experience.isCurrent ? (
+                      {experience.currentPosition ? (
                         <span className="public-experience__current">Current</span>
                       ) : null}
                     </header>
@@ -77,6 +78,11 @@ async function PublishedExperience() {
                     <p className="public-experience__dates">
                       <CalendarDays aria-hidden="true" size={15} />
                       <span>{dateRange}</span>
+                    </p>
+
+                    <p className="public-experience__employment-type">
+                      <BriefcaseBusiness aria-hidden="true" size={15} />
+                      <span>{workExperienceEmploymentTypeLabel(experience.employmentType)}</span>
                     </p>
 
                     {experience.location ? (

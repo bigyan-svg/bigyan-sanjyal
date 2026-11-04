@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "Project" ADD COLUMN "version" INTEGER NOT NULL DEFAULT 1;
+
+-- AlterTable
+ALTER TABLE "Post" ADD COLUMN "version" INTEGER NOT NULL DEFAULT 1;

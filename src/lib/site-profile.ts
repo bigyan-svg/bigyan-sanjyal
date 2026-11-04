@@ -1,27 +1,19 @@
 import "server-only";
 
 import { cache } from "react";
-import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { publicSiteProfileQuery } from "@/lib/public-site-profile-query";
+import { filterSafePublicSocialLinks } from "@/lib/profile-social-validation";
 
-export const publicSiteProfileSelect = {
-  displayName: true,
-  headline: true,
-  shortBio: true,
-  biography: true,
-  avatarUrl: true,
-} satisfies Prisma.SiteProfileSelect;
+export { publicSiteProfileSelect, siteProfileFieldsSelect } from "@/lib/public-site-profile-query";
+export type { PublicSiteProfile, SiteProfileFields } from "@/lib/public-site-profile-query";
 
-export type PublicSiteProfile = Prisma.SiteProfileGetPayload<{
-  select: typeof publicSiteProfileSelect;
-}>;
-
-export const getPublicSiteProfile = cache(async () =>
-  prisma.siteProfile.findUnique({
-    where: { id: 1 },
-    select: publicSiteProfileSelect,
-  }),
-);
+export const getPublicSiteProfile = cache(async () => {
+  const profile = await prisma.siteProfile.findUnique(publicSiteProfileQuery);
+  return profile
+    ? { ...profile, socialLinks: filterSafePublicSocialLinks(profile.socialLinks) }
+    : null;
+});
 
 export function getProfileInitials(displayName: string): string {
   const words = displayName.trim().split(/\s+/u).filter(Boolean);

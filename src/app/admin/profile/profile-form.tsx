@@ -1,39 +1,41 @@
 "use client";
 
 import { CheckCircle2, LoaderCircle, Save } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { TextArea, TextInput } from "@/components/ui/form-field";
-import type { PublicSiteProfile } from "@/lib/site-profile";
-
-type ProfileValues = {
-  displayName: string;
-  headline: string;
-  shortBio: string;
-  biography: string;
-  avatarUrl: string;
-};
+import type { PublicSiteProfile, SiteProfileFields } from "@/lib/site-profile";
+import { hasProfileUnsavedChanges, toProfileValues, type ProfileValues } from "@/lib/profile-form-state";
+import { useAdminUnsavedNavigationProtection } from "@/components/admin/admin-unsaved-navigation-guard";
+import { SocialLinksManager } from "./social-links-manager";
 
 type ProfileField = keyof ProfileValues;
 type ProfileFieldErrors = Partial<Record<ProfileField, string>>;
 
-function toProfileValues(profile: PublicSiteProfile): ProfileValues {
-  return {
-    displayName: profile.displayName,
-    headline: profile.headline ?? "",
-    shortBio: profile.shortBio ?? "",
-    biography: profile.biography ?? "",
-    avatarUrl: profile.avatarUrl ?? "",
-  };
+function isSiteProfileFields(value: unknown): value is SiteProfileFields {
+  if (typeof value !== "object" || value === null) return false;
+  const profile = value as Record<string, unknown>;
+  return (
+    typeof profile.displayName === "string" &&
+    ["headline", "shortBio", "biography", "avatarUrl"].every((field) =>
+      profile[field] === null || typeof profile[field] === "string",
+    )
+  );
 }
 
 export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProfile }) {
-  const [values, setValues] = useState(() => toProfileValues(initialProfile));
+  const initialValues = toProfileValues(initialProfile);
+  const [values, setValues] = useState(initialValues);
+  const [savedValues, setSavedValues] = useState(initialValues);
   const [fieldErrors, setFieldErrors] = useState<ProfileFieldErrors>({});
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [socialLinksDirty, setSocialLinksDirty] = useState(false);
+  const savingRef = useRef(false);
+  const profileIsDirty = hasProfileUnsavedChanges(savedValues, values);
+  useAdminUnsavedNavigationProtection(profileIsDirty || socialLinksDirty);
 
   function updateField(field: ProfileField, value: string) {
     setValues((current) => ({ ...current, [field]: value }));
@@ -45,10 +47,11 @@ export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProf
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (isSaving) {
+    if (savingRef.current) {
       return;
     }
 
+    savingRef.current = true;
     setIsSaving(true);
     setFieldErrors({});
     setSuccessMessage("");
@@ -91,23 +94,25 @@ export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProf
         typeof result !== "object" ||
         result === null ||
         !("profile" in result) ||
-        typeof result.profile !== "object" ||
-        result.profile === null
+        !isSiteProfileFields(result.profile)
       ) {
         setErrorMessage("The profile was saved, but the updated values could not be loaded.");
         return;
       }
 
-      setValues(toProfileValues(result.profile as PublicSiteProfile));
+      setValues(toProfileValues(result.profile));
+      setSavedValues(toProfileValues(result.profile));
       setSuccessMessage("Profile changes saved. Public pages now show the updated information.");
     } catch {
       setErrorMessage("Unable to save the profile. Please try again.");
     } finally {
+      savingRef.current = false;
       setIsSaving(false);
     }
   }
 
   return (
+    <>
     <Card className="profile-management__card" variant="outlined">
       <div className="profile-management__intro">
         <div>
@@ -129,6 +134,7 @@ export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProf
           label="Display name"
           maxLength={120}
           name="displayName"
+          disabled={isSaving}
           onChange={(event) => updateField("displayName", event.target.value)}
           required
           value={values.displayName}
@@ -141,6 +147,7 @@ export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProf
           label="Professional headline"
           maxLength={160}
           name="headline"
+          disabled={isSaving}
           onChange={(event) => updateField("headline", event.target.value)}
           value={values.headline}
         />
@@ -152,6 +159,7 @@ export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProf
           label="Short biography"
           maxLength={300}
           name="shortBio"
+          disabled={isSaving}
           onChange={(event) => updateField("shortBio", event.target.value)}
           rows={3}
           value={values.shortBio}
@@ -164,6 +172,7 @@ export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProf
           label="Full biography"
           maxLength={10_000}
           name="biography"
+          disabled={isSaving}
           onChange={(event) => updateField("biography", event.target.value)}
           rows={9}
           value={values.biography}
@@ -177,6 +186,7 @@ export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProf
           label="Avatar URL"
           maxLength={2_048}
           name="avatarUrl"
+          disabled={isSaving}
           onChange={(event) => updateField("avatarUrl", event.target.value)}
           placeholder="https://example.com/image.jpg"
           type="url"
@@ -209,5 +219,7 @@ export function ProfileForm({ initialProfile }: { initialProfile: PublicSiteProf
         </div>
       </form>
     </Card>
+    <SocialLinksManager onUnsavedChangesChange={setSocialLinksDirty} />
+    </>
   );
 }

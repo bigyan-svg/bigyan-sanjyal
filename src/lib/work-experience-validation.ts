@@ -1,4 +1,4 @@
-import type { ContentStatus } from "@/generated/prisma/client";
+import type { ContentStatus, EmploymentType } from "@/generated/prisma/client";
 
 export const WORK_EXPERIENCE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -7,15 +7,31 @@ export const WORK_EXPERIENCE_ROLE_TITLE_MAX_LENGTH = 160;
 export const WORK_EXPERIENCE_LOCATION_MAX_LENGTH = 160;
 export const WORK_EXPERIENCE_DESCRIPTION_MAX_LENGTH = 10_000;
 export const WORK_EXPERIENCE_SORT_ORDER_MAX = 999_999;
+export const WORK_EXPERIENCE_EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
+  FULL_TIME: "Full-time",
+  PART_TIME: "Part-time",
+  CONTRACT: "Contract",
+  FREELANCE: "Freelance",
+  INTERNSHIP: "Internship",
+  TEMPORARY: "Temporary",
+  APPRENTICESHIP: "Apprenticeship",
+  SELF_EMPLOYED: "Self-employed",
+  OTHER: "Other",
+};
+
+export function workExperienceEmploymentTypeLabel(type: EmploymentType): string {
+  return WORK_EXPERIENCE_EMPLOYMENT_TYPE_LABELS[type];
+}
 
 export type WorkExperienceField =
   | "employer"
   | "roleTitle"
+  | "employmentType"
   | "location"
   | "description"
   | "startDate"
   | "endDate"
-  | "isCurrent"
+  | "currentPosition"
   | "status"
   | "sortOrder";
 
@@ -24,11 +40,12 @@ export type WorkExperienceFieldErrors = Partial<Record<WorkExperienceField, stri
 export interface WorkExperienceWriteData {
   employer: string;
   roleTitle: string;
+  employmentType: EmploymentType;
   location: string | null;
   description: string | null;
   startDate: Date | null;
   endDate: Date | null;
-  isCurrent: boolean;
+  currentPosition: boolean;
   status: ContentStatus;
   sortOrder: number;
 }
@@ -37,6 +54,7 @@ export type WorkExperiencePatchData = Partial<WorkExperienceWriteData>;
 
 export interface WorkExperienceRecord extends WorkExperienceWriteData {
   id: string;
+  version: number;
   publishedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -55,11 +73,12 @@ export interface ParsedWorkExperienceInput<T> {
 const ALLOWED_FIELDS = new Set<WorkExperienceField>([
   "employer",
   "roleTitle",
+  "employmentType",
   "location",
   "description",
   "startDate",
   "endDate",
-  "isCurrent",
+  "currentPosition",
   "status",
   "sortOrder",
 ]);
@@ -68,6 +87,9 @@ const WORK_EXPERIENCE_STATUSES = new Set<ContentStatus>([
   "PUBLISHED",
   "ARCHIVED",
 ]);
+const WORK_EXPERIENCE_EMPLOYMENT_TYPES = new Set<EmploymentType>(
+  Object.keys(WORK_EXPERIENCE_EMPLOYMENT_TYPE_LABELS) as EmploymentType[],
+);
 const ISO_DATE_PATTERN = /^(?!0000)\d{4}-\d{2}-\d{2}$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -106,7 +128,7 @@ function parseRequiredText(
 ): string | undefined {
   const text = typeof value === "string" ? sanitizeSingleLine(value) : "";
   if (!text) {
-    errors[field] = field === "employer" ? "Employer is required." : "Role title is required.";
+    errors[field] = field === "employer" ? "Company name is required." : "Role title is required.";
     return undefined;
   }
   if (lengthInCharacters(text) > maxLength) {
@@ -160,10 +182,14 @@ function isContentStatus(value: unknown): value is ContentStatus {
   return typeof value === "string" && WORK_EXPERIENCE_STATUSES.has(value as ContentStatus);
 }
 
+function isEmploymentType(value: unknown): value is EmploymentType {
+  return typeof value === "string" && WORK_EXPERIENCE_EMPLOYMENT_TYPES.has(value as EmploymentType);
+}
+
 function validateWorkExperienceState(data: WorkExperienceWriteData): WorkExperienceFieldErrors {
   const errors: WorkExperienceFieldErrors = {};
 
-  if (!data.employer.trim()) errors.employer = "Employer is required.";
+  if (!data.employer.trim()) errors.employer = "Company name is required.";
   else if (lengthInCharacters(data.employer) > WORK_EXPERIENCE_EMPLOYER_MAX_LENGTH) {
     errors.employer = `Use ${WORK_EXPERIENCE_EMPLOYER_MAX_LENGTH} characters or fewer.`;
   }
@@ -194,9 +220,9 @@ function validateWorkExperienceState(data: WorkExperienceWriteData): WorkExperie
   ) {
     errors.endDate = "End date must be on or after the start date.";
   }
-  if (data.isCurrent && data.endDate !== null) {
+  if (data.currentPosition && data.endDate !== null) {
     errors.endDate = "A current role cannot have an end date.";
-  } else if (!data.isCurrent && data.endDate === null) {
+  } else if (!data.currentPosition && data.endDate === null) {
     errors.endDate = "Enter an end date or mark this role as current.";
   }
   if (data.status === "PUBLISHED" && data.startDate === null) {
@@ -226,6 +252,10 @@ export function parseCreateWorkExperience(
     WORK_EXPERIENCE_ROLE_TITLE_MAX_LENGTH,
     errors,
   );
+  const employmentType = body.employmentType;
+  if (!isEmploymentType(employmentType)) {
+    errors.employmentType = "Choose an employment type.";
+  }
 
   const location = parseOptionalText(
     hasOwn(body, "location") ? body.location : null,
@@ -244,8 +274,8 @@ export function parseCreateWorkExperience(
   const startDate = parseDate(hasOwn(body, "startDate") ? body.startDate : null, "startDate", errors);
   const endDate = parseDate(hasOwn(body, "endDate") ? body.endDate : null, "endDate", errors);
 
-  const isCurrent = hasOwn(body, "isCurrent") ? body.isCurrent : false;
-  if (typeof isCurrent !== "boolean") errors.isCurrent = "Choose whether this is a current role.";
+  const currentPosition = hasOwn(body, "currentPosition") ? body.currentPosition : false;
+  if (typeof currentPosition !== "boolean") errors.currentPosition = "Choose whether this is a current role.";
 
   const status = hasOwn(body, "status") ? body.status : "DRAFT";
   if (!isContentStatus(status)) errors.status = "Choose Draft, Published, or Archived.";
@@ -264,22 +294,24 @@ export function parseCreateWorkExperience(
     Object.keys(errors).length === 0 &&
     employer !== undefined &&
     roleTitle !== undefined &&
+    isEmploymentType(employmentType) &&
     location !== undefined &&
     description !== undefined &&
     startDate !== undefined &&
     endDate !== undefined &&
-    typeof isCurrent === "boolean" &&
+    typeof currentPosition === "boolean" &&
     isContentStatus(status) &&
     typeof sortOrder === "number"
   ) {
     const data: WorkExperienceWriteData = {
       employer,
       roleTitle,
+      employmentType,
       location,
       description,
       startDate,
       endDate,
-      isCurrent,
+      currentPosition,
       status,
       sortOrder,
     };
@@ -331,11 +363,19 @@ export function parseUpdateWorkExperience(
     }
   }
 
-  if (hasOwn(body, "isCurrent")) {
-    if (typeof body.isCurrent !== "boolean") {
-      errors.isCurrent = "Choose whether this is a current role.";
+  if (hasOwn(body, "employmentType")) {
+    if (!isEmploymentType(body.employmentType)) {
+      errors.employmentType = "Choose an employment type.";
     } else {
-      data.isCurrent = body.isCurrent;
+      data.employmentType = body.employmentType;
+    }
+  }
+
+  if (hasOwn(body, "currentPosition")) {
+    if (typeof body.currentPosition !== "boolean") {
+      errors.currentPosition = "Choose whether this is a current role.";
+    } else {
+      data.currentPosition = body.currentPosition;
     }
   }
 
@@ -383,11 +423,12 @@ export function prepareWorkExperienceUpdate(
   const merged: WorkExperienceWriteData = {
     employer: patch.employer !== undefined ? patch.employer : current.employer,
     roleTitle: patch.roleTitle !== undefined ? patch.roleTitle : current.roleTitle,
+    employmentType: patch.employmentType !== undefined ? patch.employmentType : current.employmentType,
     location: patch.location !== undefined ? patch.location : current.location,
     description: patch.description !== undefined ? patch.description : current.description,
     startDate: patch.startDate !== undefined ? patch.startDate : current.startDate,
     endDate: patch.endDate !== undefined ? patch.endDate : current.endDate,
-    isCurrent: patch.isCurrent !== undefined ? patch.isCurrent : current.isCurrent,
+    currentPosition: patch.currentPosition !== undefined ? patch.currentPosition : current.currentPosition,
     status: patch.status !== undefined ? patch.status : current.status,
     sortOrder: patch.sortOrder !== undefined ? patch.sortOrder : current.sortOrder,
   };

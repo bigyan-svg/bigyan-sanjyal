@@ -1,7 +1,7 @@
 import "server-only";
 
 import { authorizeAdminContentWrite } from "@/lib/auth/admin-content";
-import { updateEducationInTransaction } from "@/lib/education-content";
+import { deleteEducationWithVersion, updateEducationInTransaction } from "@/lib/education-content";
 import {
   handleEducationDelete,
   handleEducationUpdate,
@@ -20,9 +20,9 @@ export async function PATCH(
 
   return handleEducationUpdate(request, id, {
     authorize: authorizeAdminContentWrite,
-    update: (educationId, patch, now) =>
+    update: (educationId, patch, expectedVersion, now) =>
       prisma.$transaction((transaction) =>
-        updateEducationInTransaction(transaction, educationId, patch, now),
+        updateEducationInTransaction(transaction, educationId, patch, expectedVersion, now),
       ),
   });
 }
@@ -35,9 +35,9 @@ export async function DELETE(
 
   return handleEducationDelete(request, id, {
     authorize: (incomingRequest) => authorizeAdminContentWrite(incomingRequest, false),
-    delete: async (educationId) => {
-      const result = await prisma.education.deleteMany({ where: { id: educationId } });
-      return result.count > 0;
-    },
+    delete: (educationId, expectedVersion) =>
+      prisma.$transaction((transaction) =>
+        deleteEducationWithVersion(transaction, educationId, expectedVersion),
+      ),
   });
 }

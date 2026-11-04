@@ -11,25 +11,30 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { ContentStatus } from "@/generated/prisma/client";
+import type { ContentStatus, EmploymentType } from "@/generated/prisma/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TextArea, TextInput } from "@/components/ui/form-field";
+import { useAdminUnsavedNavigationProtection } from "@/components/admin/admin-unsaved-navigation-guard";
 import {
   createEmptyWorkExperienceFormValues,
   deleteWorkExperienceRecord,
   loadWorkExperienceRecords,
+  runWorkExperienceRequestOnce,
   saveWorkExperienceRecord,
   setCurrentEmployment,
+  workExperienceSaveEditorTransition,
   validateWorkExperienceForm,
   workExperienceToFormValues,
   type AdminWorkExperienceItem,
   type WorkExperienceFormFieldErrors,
   type WorkExperienceFormValues,
+  type WorkExperienceRequestResult,
 } from "@/lib/work-experience-form";
 import { confirmDiscardIfDirty, hasUnsavedChanges } from "@/lib/unsaved-changes";
+import { WORK_EXPERIENCE_EMPLOYMENT_TYPE_LABELS, workExperienceEmploymentTypeLabel } from "@/lib/work-experience-validation";
 
 interface WorkExperienceEditor {
   item: AdminWorkExperienceItem | null;
@@ -72,6 +77,7 @@ export function WorkExperienceManager() {
   const editorIsDirty = Boolean(
     editor && hasUnsavedChanges(editor.initialValues, editor.values),
   );
+  useAdminUnsavedNavigationProtection(editorIsDirty);
 
   const refreshRecords = useCallback(async (initialLoad = false) => {
     if (initialLoad) setIsLoading(true);
@@ -111,36 +117,6 @@ export function WorkExperienceManager() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!editorIsDirty) return;
-
-    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    const handleNavigation = (event: MouseEvent) => {
-      if (
-        event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey ||
-        event.shiftKey || event.altKey
-      ) return;
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const link = target.closest("a[href]");
-      if (!link || link.getAttribute("target") === "_blank" || link.hasAttribute("download")) return;
-      if (!confirmDiscardIfDirty(true)) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    document.addEventListener("click", handleNavigation, true);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      document.removeEventListener("click", handleNavigation, true);
-    };
-  }, [editorIsDirty]);
-
   function openEditor(item: AdminWorkExperienceItem | null) {
     const values = item
       ? workExperienceToFormValues(item)
@@ -168,21 +144,24 @@ export function WorkExperienceManager() {
     } : current);
     setFieldErrors((current) => ({ ...current, [field]: undefined }));
     setPageError("");
+    setPageSuccess("");
   }
 
-  function updateCurrentEmployment(isCurrent: boolean) {
+  function updateCurrentEmployment(currentPosition: boolean) {
     setEditor((current) => current ? {
       ...current,
-      values: setCurrentEmployment(current.values, isCurrent),
+      values: setCurrentEmployment(current.values, currentPosition),
     } : current);
-    setFieldErrors((current) => ({ ...current, isCurrent: undefined, endDate: undefined }));
+    setFieldErrors((current) => ({ ...current, currentPosition: undefined, endDate: undefined }));
     setPageError("");
+    setPageSuccess("");
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editor || savingRef.current) return;
 
+    setPageSuccess("");
     const localErrors = validateWorkExperienceForm(editor.values);
     if (Object.keys(localErrors).length > 0) {
       setFieldErrors(localErrors);
@@ -190,25 +169,43 @@ export function WorkExperienceManager() {
       return;
     }
 
-    savingRef.current = true;
     setSaving(true);
     setPageError("");
-    setPageSuccess("");
-    const result = await saveWorkExperienceRecord(editor.item?.id ?? null, editor.values);
-    savingRef.current = false;
-    setSaving(false);
+    const submittedEditor = editor;
+    let result: WorkExperienceRequestResult<AdminWorkExperienceItem>;
+    try {
+      const request = await runWorkExperienceRequestOnce(savingRef, () =>
+        saveWorkExperienceRecord(
+          submittedEditor.item?.id ?? null,
+          submittedEditor.values,
+          fetch,
+          submittedEditor.item?.version,
+        ),
+      );
+      if (!request.started) return;
+      result = request.value;
+    } catch {
+      setPageError("Unable to save work experience. Check your connection and try again.");
+      setSessionExpired(false);
+      return;
+    } finally {
+      setSaving(false);
+    }
 
+    const operation = submittedEditor.item === null ? "create" : "update";
     if (!result.ok) {
+      const transition = workExperienceSaveEditorTransition(submittedEditor, result, operation);
       setFieldErrors(result.fields ?? {});
       setPageError(result.error);
+      setPageSuccess(transition.successMessage);
       setSessionExpired(Boolean(result.unauthorized));
       return;
     }
 
-    const isNew = editor.item === null;
-    setEditor(null);
+    const transition = workExperienceSaveEditorTransition(submittedEditor, result, operation);
+    setEditor(transition.editor);
     setFieldErrors({});
-    setPageSuccess(isNew ? "Work experience was created." : "Work experience was updated.");
+    setPageSuccess(transition.successMessage);
     await refreshRecords();
   }
 
@@ -230,7 +227,7 @@ export function WorkExperienceManager() {
     deletingRef.current = true;
     setDeleting(true);
     setDeleteError("");
-    const result = await deleteWorkExperienceRecord(pendingDelete.id, true);
+    const result = await deleteWorkExperienceRecord(pendingDelete.id, pendingDelete.version, true);
     deletingRef.current = false;
     setDeleting(false);
 
@@ -259,7 +256,7 @@ export function WorkExperienceManager() {
         </Button>
       </div>
 
-      {pageSuccess ? <p className="experience-management__feedback experience-management__feedback--success" role="status" aria-live="polite">{pageSuccess}</p> : null}
+      {pageSuccess && !editor ? <p className="experience-management__feedback experience-management__feedback--success" role="status" aria-live="polite">{pageSuccess}</p> : null}
       {pageError && !editor && items.length > 0 ? (
         <div className="experience-management__feedback experience-management__feedback--error" role="alert">
           <span>{pageError}</span>
@@ -304,14 +301,15 @@ export function WorkExperienceManager() {
                     <span className={`experience-management__status experience-management__status--${item.status.toLowerCase()}`}>
                       {statusLabel(item.status)}
                     </span>
-                    {item.isCurrent ? <span className="experience-management__current">Current</span> : null}
+                    {item.currentPosition ? <span className="experience-management__current">Current</span> : null}
                   </div>
                   <p className="experience-management__employer">{item.employer}</p>
                   <div className="experience-management__meta">
+                    <span className="experience-management__employment-type">{workExperienceEmploymentTypeLabel(item.employmentType)}</span>
                     {item.location ? <span><MapPin aria-hidden="true" size={14} />{item.location}</span> : null}
                     <span>
                       <CalendarDays aria-hidden="true" size={14} />
-                      {dateLabel(item.startDate)} – {item.isCurrent ? "Present" : dateLabel(item.endDate)}
+                      {dateLabel(item.startDate)} – {item.currentPosition ? "Present" : dateLabel(item.endDate)}
                     </span>
                     <span>Order {item.sortOrder}</span>
                   </div>
@@ -341,12 +339,13 @@ export function WorkExperienceManager() {
         </>
       )}
 
-      <Dialog
-        open={editor !== null}
-        onClose={closeEditor}
-        title={editor?.item ? "Edit work experience" : "Add work experience"}
-        description="Employer, role title, and start date are required. Add an end date unless this is a current role."
-      >
+      {editor && (
+        <Dialog
+          open={true}
+          onClose={closeEditor}
+          title={editor?.item ? "Edit work experience" : "Add work experience"}
+          description="Company name, role title, and start date are required. Add an end date unless this is a current role."
+        >
         {editor ? (
           <form aria-busy={saving} className="experience-management__form" noValidate onSubmit={handleSubmit}>
             <div className="experience-management__form-grid">
@@ -354,7 +353,7 @@ export function WorkExperienceManager() {
                 autoComplete="organization"
                 error={fieldErrors.employer}
                 id="experience-employer"
-                label="Employer"
+                label="Company name"
                 maxLength={200}
                 onChange={(event) => updateEditorValue("employer", event.currentTarget.value)}
                 required
@@ -369,6 +368,24 @@ export function WorkExperienceManager() {
                 required
                 value={editor.values.roleTitle}
               />
+              <label className="experience-management__field" htmlFor="experience-employment-type">
+                <span className="experience-management__field-label">Employment type</span>
+                <select
+                  aria-describedby={fieldErrors.employmentType ? "experience-employment-type-error" : undefined}
+                  aria-invalid={fieldErrors.employmentType ? true : undefined}
+                  className="form-control"
+                  id="experience-employment-type"
+                  onChange={(event) => updateEditorValue("employmentType", event.currentTarget.value as EmploymentType | "")}
+                  required
+                  value={editor.values.employmentType}
+                >
+                  <option disabled value="">Choose employment type</option>
+                  {Object.entries(WORK_EXPERIENCE_EMPLOYMENT_TYPE_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+                {fieldErrors.employmentType ? <span className="experience-management__field-error" id="experience-employment-type-error">{fieldErrors.employmentType}</span> : null}
+              </label>
               <TextInput
                 autoComplete="address-level2"
                 error={fieldErrors.location}
@@ -388,29 +405,29 @@ export function WorkExperienceManager() {
                 value={editor.values.startDate}
               />
               <TextInput
-                disabled={editor.values.isCurrent}
+                disabled={editor.values.currentPosition}
                 error={fieldErrors.endDate}
                 id="experience-end-date"
                 label="End date"
                 onChange={(event) => updateEditorValue("endDate", event.currentTarget.value)}
-                required={!editor.values.isCurrent}
+                required={!editor.values.currentPosition}
                 type="date"
                 value={editor.values.endDate}
               />
               <label
                 className="experience-management__checkbox"
-                htmlFor="experience-current"
+                htmlFor="experience-current-position"
               >
                 <input
-                  aria-describedby={fieldErrors.isCurrent ? "experience-current-error" : undefined}
-                  aria-invalid={fieldErrors.isCurrent ? true : undefined}
-                  checked={editor.values.isCurrent}
-                  id="experience-current"
+                  aria-describedby={fieldErrors.currentPosition ? "experience-current-position-error" : undefined}
+                  aria-invalid={fieldErrors.currentPosition ? true : undefined}
+                  checked={editor.values.currentPosition}
+                  id="experience-current-position"
                   onChange={(event) => updateCurrentEmployment(event.currentTarget.checked)}
                   type="checkbox"
                 />
-                <span>This is a current role</span>
-                {fieldErrors.isCurrent ? <span className="experience-management__field-error" id="experience-current-error">{fieldErrors.isCurrent}</span> : null}
+                <span>I currently work here</span>
+                {fieldErrors.currentPosition ? <span className="experience-management__field-error" id="experience-current-position-error">{fieldErrors.currentPosition}</span> : null}
               </label>
               <label className="experience-management__field" htmlFor="experience-status">
                 <span className="experience-management__field-label">Status</span>
@@ -465,7 +482,8 @@ export function WorkExperienceManager() {
             </div>
           </form>
         ) : null}
-      </Dialog>
+        </Dialog>
+      )}
 
       <Dialog
         open={pendingDelete !== null}

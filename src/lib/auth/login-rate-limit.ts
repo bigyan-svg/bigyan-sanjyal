@@ -4,14 +4,62 @@ import { createHmac } from "node:crypto";
 import { isIP } from "node:net";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
+import {
+  getRateLimitReadiness,
+  type RateLimitEnvironment,
+} from "./rate-limit-readiness";
 
 const RATE_LIMIT_TIMEOUT_MS = 1_000;
-const RATE_LIMIT_HMAC_SECRET_MIN_BYTES = 32;
+
+export const ADMIN_RATE_LIMIT_POLICIES = {
+  adminLoginIpFifteenMinutes: {
+    limit: 10,
+    window: "15 m",
+    prefix: "admin-login:ip:15m",
+  },
+  adminLoginIpOneHour: {
+    limit: 30,
+    window: "1 h",
+    prefix: "admin-login:ip:1h",
+  },
+  adminLoginEmailIpFifteenMinutes: {
+    limit: 10,
+    window: "15 m",
+    prefix: "admin-login:email-ip:15m",
+  },
+  adminLoginEmailFifteenMinutes: {
+    limit: 10,
+    window: "15 m",
+    prefix: "admin-login:email:15m",
+  },
+  adminLoginEmailOneHour: {
+    limit: 30,
+    window: "1 h",
+    prefix: "admin-login:email:1h",
+  },
+  adminPasswordChangeIpFifteenMinutes: {
+    limit: 5,
+    window: "15 m",
+    prefix: "admin-password-change:admin-ip:15m",
+  },
+  contactIpFifteenMinutes: {
+    limit: 5,
+    window: "15 m",
+    prefix: "contact-submit:ip:15m",
+  },
+  contactIpOneHour: {
+    limit: 20,
+    window: "1 h",
+    prefix: "contact-submit:ip:1h",
+  },
+} as const;
 
 type RequestLimiters = {
   ipFifteenMinutes: Ratelimit;
   ipOneHour: Ratelimit;
   emailIpFifteenMinutes: Ratelimit;
+  emailFifteenMinutes: Ratelimit;
+  emailOneHour: Ratelimit;
   adminIpPasswordChangeFifteenMinutes: Ratelimit;
   contactIpFifteenMinutes: Ratelimit;
   contactIpOneHour: Ratelimit;
@@ -23,6 +71,25 @@ export type AdminLoginRateLimitResult =
   | { status: "limited"; retryAfterSeconds: number }
   | { status: "unavailable" };
 
+type RateLimitDecision = {
+  success: boolean;
+  reset: number;
+  reason?: string;
+};
+
+type LoginRateLimiter = {
+  limit(identifier: string): Promise<RateLimitDecision>;
+};
+
+export type AdminLoginRateLimitBackend = {
+  hmacSecret: string;
+  ipFifteenMinutes: LoginRateLimiter;
+  ipOneHour: LoginRateLimiter;
+  emailIpFifteenMinutes: LoginRateLimiter;
+  emailFifteenMinutes: LoginRateLimiter;
+  emailOneHour: LoginRateLimiter;
+};
+
 export type ContactRateLimitResult =
   | { status: "allowed" }
   | { status: "limited"; retryAfterSeconds: number }
@@ -30,8 +97,12 @@ export type ContactRateLimitResult =
 
 let cachedLimiters: RequestLimiters | undefined;
 
-function getTrustedClientIp(request: Request): string | null {
-  if (process.env.VERCEL === "1") {
+export function getTrustedClientIp(
+  request: Request,
+  environment: RateLimitEnvironment = process.env,
+): string | null {
+  if (environment.VERCEL === "1") {
+    // Trust only Vercel's edge-provided value; never fall back to generic proxy headers.
     const forwardedIp = request.headers.get("x-vercel-forwarded-for")?.trim();
 
     if (!forwardedIp || forwardedIp.includes(",") || isIP(forwardedIp) === 0) {
@@ -42,9 +113,9 @@ function getTrustedClientIp(request: Request): string | null {
   }
 
   if (
-    process.env.NODE_ENV === "development" &&
-    process.env.VERCEL !== "1" &&
-    process.env.ENABLE_LOCAL_LOGIN_RATE_LIMIT === "true"
+    environment.NODE_ENV === "development" &&
+    environment.VERCEL !== "1" &&
+    environment.ENABLE_LOCAL_LOGIN_RATE_LIMIT === "true"
   ) {
     return "local-development";
   }
@@ -57,30 +128,11 @@ function createLimiters(): RequestLimiters | null {
   const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
   const hmacSecret = process.env.ADMIN_RATE_LIMIT_HMAC_SECRET;
 
-  if (!redisUrl || !redisToken?.trim() || !hmacSecret) {
+  if (!getRateLimitReadiness(process.env).redisConfigurationReady) {
     return null;
   }
 
-  if (Buffer.byteLength(hmacSecret, "utf8") < RATE_LIMIT_HMAC_SECRET_MIN_BYTES) {
-    return null;
-  }
-
-  try {
-    const parsedRedisUrl = new URL(redisUrl);
-
-    if (
-      parsedRedisUrl.protocol !== "https:" ||
-      !parsedRedisUrl.hostname.endsWith(".upstash.io") ||
-      parsedRedisUrl.username !== "" ||
-      parsedRedisUrl.password !== "" ||
-      parsedRedisUrl.search !== "" ||
-      parsedRedisUrl.hash !== ""
-    ) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
+  if (!redisUrl || !redisToken?.trim() || !hmacSecret) return null;
 
   const redis = new Redis({
     url: redisUrl,
@@ -92,43 +144,81 @@ function createLimiters(): RequestLimiters | null {
     hmacSecret,
     ipFifteenMinutes: new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(10, "15 m"),
-      prefix: "admin-login:ip:15m",
+      limiter: Ratelimit.slidingWindow(
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginIpFifteenMinutes.limit,
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginIpFifteenMinutes.window,
+      ),
+      prefix: ADMIN_RATE_LIMIT_POLICIES.adminLoginIpFifteenMinutes.prefix,
       analytics: false,
       timeout: RATE_LIMIT_TIMEOUT_MS,
     }),
     ipOneHour: new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(30, "1 h"),
-      prefix: "admin-login:ip:1h",
+      limiter: Ratelimit.slidingWindow(
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginIpOneHour.limit,
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginIpOneHour.window,
+      ),
+      prefix: ADMIN_RATE_LIMIT_POLICIES.adminLoginIpOneHour.prefix,
       analytics: false,
       timeout: RATE_LIMIT_TIMEOUT_MS,
     }),
     emailIpFifteenMinutes: new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(10, "15 m"),
-      prefix: "admin-login:email-ip:15m",
+      limiter: Ratelimit.slidingWindow(
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailIpFifteenMinutes.limit,
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailIpFifteenMinutes.window,
+      ),
+      prefix: ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailIpFifteenMinutes.prefix,
+      analytics: false,
+      timeout: RATE_LIMIT_TIMEOUT_MS,
+    }),
+    emailFifteenMinutes: new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailFifteenMinutes.limit,
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailFifteenMinutes.window,
+      ),
+      prefix: ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailFifteenMinutes.prefix,
+      analytics: false,
+      timeout: RATE_LIMIT_TIMEOUT_MS,
+    }),
+    emailOneHour: new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailOneHour.limit,
+        ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailOneHour.window,
+      ),
+      prefix: ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailOneHour.prefix,
       analytics: false,
       timeout: RATE_LIMIT_TIMEOUT_MS,
     }),
     adminIpPasswordChangeFifteenMinutes: new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(5, "15 m"),
-      prefix: "admin-password-change:admin-ip:15m",
+      limiter: Ratelimit.slidingWindow(
+        ADMIN_RATE_LIMIT_POLICIES.adminPasswordChangeIpFifteenMinutes.limit,
+        ADMIN_RATE_LIMIT_POLICIES.adminPasswordChangeIpFifteenMinutes.window,
+      ),
+      prefix: ADMIN_RATE_LIMIT_POLICIES.adminPasswordChangeIpFifteenMinutes.prefix,
       analytics: false,
       timeout: RATE_LIMIT_TIMEOUT_MS,
     }),
     contactIpFifteenMinutes: new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(5, "15 m"),
-      prefix: "contact-submit:ip:15m",
+      limiter: Ratelimit.slidingWindow(
+        ADMIN_RATE_LIMIT_POLICIES.contactIpFifteenMinutes.limit,
+        ADMIN_RATE_LIMIT_POLICIES.contactIpFifteenMinutes.window,
+      ),
+      prefix: ADMIN_RATE_LIMIT_POLICIES.contactIpFifteenMinutes.prefix,
       analytics: false,
       timeout: RATE_LIMIT_TIMEOUT_MS,
     }),
     contactIpOneHour: new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(20, "1 h"),
-      prefix: "contact-submit:ip:1h",
+      limiter: Ratelimit.slidingWindow(
+        ADMIN_RATE_LIMIT_POLICIES.contactIpOneHour.limit,
+        ADMIN_RATE_LIMIT_POLICIES.contactIpOneHour.window,
+      ),
+      prefix: ADMIN_RATE_LIMIT_POLICIES.contactIpOneHour.prefix,
       analytics: false,
       timeout: RATE_LIMIT_TIMEOUT_MS,
     }),
@@ -149,7 +239,7 @@ function getLimiters(): RequestLimiters | null {
   return limiters;
 }
 
-function pseudonymousIdentifier(
+export function createRateLimitPseudonym(
   secret: string,
   scope: string,
   value: string,
@@ -161,9 +251,17 @@ function pseudonymousIdentifier(
     .digest("hex");
 }
 
+export function createAdminLoginEmailPseudonym(
+  secret: string,
+  email: string,
+): string {
+  return createRateLimitPseudonym(secret, "email", email.trim().toLowerCase());
+}
+
 export async function checkAdminLoginRateLimit(
   request: Request,
   normalizedEmail: string,
+  backend?: AdminLoginRateLimitBackend,
 ): Promise<AdminLoginRateLimitResult> {
   const clientIp = getTrustedClientIp(request);
 
@@ -172,27 +270,33 @@ export async function checkAdminLoginRateLimit(
   }
 
   try {
-    const limiters = getLimiters();
+    const limiters = backend ?? getLimiters();
 
     if (!limiters) {
       return { status: "unavailable" };
     }
 
-    const ipIdentifier = pseudonymousIdentifier(
+    const ipIdentifier = createRateLimitPseudonym(
       limiters.hmacSecret,
       "ip",
       clientIp,
     );
-    const emailIpIdentifier = pseudonymousIdentifier(
+    const emailIpIdentifier = createRateLimitPseudonym(
       limiters.hmacSecret,
       "email-ip",
       `${normalizedEmail.trim().toLowerCase()}\0${clientIp}`,
+    );
+    const emailIdentifier = createAdminLoginEmailPseudonym(
+      limiters.hmacSecret,
+      normalizedEmail,
     );
 
     const results = await Promise.all([
       limiters.ipFifteenMinutes.limit(ipIdentifier),
       limiters.ipOneHour.limit(ipIdentifier),
       limiters.emailIpFifteenMinutes.limit(emailIpIdentifier),
+      limiters.emailFifteenMinutes.limit(emailIdentifier),
+      limiters.emailOneHour.limit(emailIdentifier),
     ]);
 
     if (results.some((result) => result.reason === "timeout")) {
@@ -233,7 +337,7 @@ export async function checkAdminPasswordChangeRateLimit(
       return { status: "unavailable" };
     }
 
-    const adminIpIdentifier = pseudonymousIdentifier(
+    const adminIpIdentifier = createRateLimitPseudonym(
       limiters.hmacSecret,
       "admin-ip-password-change",
       `${adminUserId}\0${clientIp}`,
@@ -275,7 +379,7 @@ export async function checkContactSubmissionRateLimit(
       return { status: "unavailable" };
     }
 
-    const identifier = pseudonymousIdentifier(
+    const identifier = createRateLimitPseudonym(
       limiters.hmacSecret,
       "contact-ip",
       clientIp,

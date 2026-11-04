@@ -22,8 +22,14 @@ export interface AdminBlogTag extends AdminBlogTagOption {
   postCount: number;
 }
 
+export interface AffectedBlogPostVersion {
+  id: string;
+  version: number;
+}
+
 export interface AdminBlogPostItem {
   id: string;
+  version: number;
   title: string;
   slug: string;
   excerpt: string | null;

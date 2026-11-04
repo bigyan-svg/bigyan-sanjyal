@@ -1,6 +1,8 @@
 import "server-only";
 
-import { prisma } from "@/lib/prisma";
+import { randomUUID } from "node:crypto";
+import { getPrismaDatabaseIdentity, prisma } from "@/lib/prisma";
+import { logAdminAuthDiagnostic } from "./auth-diagnostics";
 import { generateSessionToken, hashSessionToken } from "./session-token";
 
 const DEFAULT_SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -50,15 +52,53 @@ export async function createAdminSession(
       throw new Error("Cannot create a session for a missing, inactive, or changed admin user.");
     }
 
-    await transaction.adminSession.create({
-      data: {
-        userId: adminUser.id,
-        tokenHash,
-        expiresAt,
-      },
-      select: { id: true },
-    });
+    const createdSessions = await transaction.$executeRaw`
+      WITH session_clock AS (
+        SELECT
+          admin_user."id" AS "userId",
+          GREATEST(
+            clock_timestamp(),
+            admin_user."passwordChangedAt" + INTERVAL '1 microsecond'
+          ) AS "createdAt"
+        FROM "AdminUser" AS admin_user
+        WHERE admin_user."id" = ${adminUser.id}
+          AND admin_user."isActive" = TRUE
+          AND admin_user."passwordHash" = ${options.expectedPasswordHash}
+      )
+      INSERT INTO "AdminSession" (
+        "id",
+        "userId",
+        "tokenHash",
+        "createdAt",
+        "lastSeenAt",
+        "expiresAt"
+      )
+      SELECT
+        ${randomUUID()}::uuid,
+        session_clock."userId",
+        ${tokenHash},
+        session_clock."createdAt",
+        session_clock."createdAt",
+        session_clock."createdAt" + (${lifetimeMs} * INTERVAL '1 millisecond')
+      FROM session_clock
+    `;
+
+    if (createdSessions !== 1) {
+      throw new Error("Unable to persist the admin session.");
+    }
   });
+
+  const databaseIdentity = getPrismaDatabaseIdentity();
+  logAdminAuthDiagnostic(
+    {
+      boundary: "session-create",
+      outcome: "persisted",
+      databaseTargetSource: databaseIdentity.source === "uninitialized"
+        ? undefined
+        : databaseIdentity.source,
+    },
+    databaseIdentity.target,
+  );
 
   return { token };
 }

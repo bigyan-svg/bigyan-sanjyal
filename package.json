@@ -4,15 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "prisma generate --config prisma7.config.ts",
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate --config prisma7.config.ts && next build",
     "start": "next start",
     "lint": "eslint",
     "test": "node --conditions=react-server --import=tsx --test tests/*.test.ts",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate --config prisma7.config.ts",
+    "admin:operator": "node --conditions=react-server --import=tsx scripts/admin-operator.ts",
+    "db:migrate": "prisma migrate dev --config prisma.migrate.config.ts",
+    "db:migrate:deploy": "prisma migrate deploy --config prisma.deploy.config.ts",
     "db:studio": "prisma studio",
-    "admin:create": "node --conditions=react-server --import=tsx scripts/create-admin.ts"
+    "db:integration:verify": "node --conditions=react-server --import=tsx scripts/verify-integration-test-target.ts",
+    "db:integration:verify-empty": "node --conditions=react-server --import=tsx scripts/verify-integration-test-target.ts --require-empty",
+    "db:integration:verify-schema": "node --conditions=react-server --import=tsx scripts/verify-integration-test-target.ts --verify-schema",
+    "db:integration:verify-fixtures-clean": "node --conditions=react-server --import=tsx scripts/verify-integration-test-target.ts --verify-fixtures-clean",
+    "db:integration:migrate": "npm run db:integration:verify && prisma --config prisma.integration.config.ts migrate deploy",
+    "test:integration:concurrency": "npm run db:integration:verify-schema && node --conditions=react-server --import=tsx --test tests/postgres-concurrency.integration.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",
@@ -45,5 +53,8 @@
     "prisma@7.10.1": true,
     "@prisma/engines@7.10.1": true,
     "argon2": true
+  },
+  "engines": {
+    "node": "^22.12.0"
   }
 }

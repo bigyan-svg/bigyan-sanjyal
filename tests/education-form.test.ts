@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import type { AdminRole } from "../src/generated/prisma/client";
 import {
   createEmptyEducationFormValues,
   deleteEducationRecord,
+  educationSaveSuccessMessage,
   educationFormPayload,
   educationToFormValues,
   loadEducationRecords,
@@ -32,6 +34,7 @@ const validValues: EducationFormValues = {
 function item(overrides: Partial<AdminEducationItem> = {}): AdminEducationItem {
   return {
     id: "11111111-1111-4111-8111-111111111111",
+    version: 1,
     institution: "Example Institute",
     program: "Bachelor of Example Studies",
     fieldOfStudy: "Example Studies",
@@ -161,21 +164,33 @@ test("create and edit use the Education API with matching payloads", async () =>
   const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
   const fetcher = mockFetch(async (input, init) => {
     calls.push({ input, init });
-    return Response.json({ education: item() }, { status: calls.length === 1 ? 201 : 200 });
+    return Response.json({ education: item({ version: calls.length }) }, { status: calls.length === 1 ? 201 : 200 });
   });
 
   const created = await saveEducationRecord(null, validValues, fetcher);
-  const edited = await saveEducationRecord(item().id, { ...validValues, program: "Updated program" }, fetcher);
+  const edited = await saveEducationRecord(item().id, { ...validValues, program: "Updated program" }, fetcher, item().version);
+  const nextEdit = edited.ok
+    ? await saveEducationRecord(item().id, { ...validValues, program: "Another update" }, fetcher, edited.value.version)
+    : edited;
 
   assert.equal(created.ok, true);
   assert.equal(edited.ok, true);
+  assert.equal(nextEdit.ok, true);
+  assert.equal(educationSaveSuccessMessage(created, "create"), "Education created successfully.");
+  assert.equal(educationSaveSuccessMessage(edited, "update"), "Education updated successfully.");
+  assert.equal(educationSaveSuccessMessage(nextEdit, "update"), "Education updated successfully.");
   assert.equal(String(calls[0]?.input), "/api/admin/education");
   assert.equal(calls[0]?.init?.method, "POST");
+  assert.equal(new Headers(calls[0]?.init?.headers).get("If-Match"), null);
   assert.equal(calls[1]?.init?.method, "PATCH");
   assert.equal(String(calls[1]?.input), `/api/admin/education/${item().id}`);
   assert.equal(calls[1]?.init?.credentials, "same-origin");
   assert.equal(calls[1]?.init?.cache, "no-store");
-  assert.equal(calls[1]?.init?.headers && (calls[1]?.init?.headers as Record<string, string>)["Content-Type"], "application/json");
+  assert.equal(new Headers(calls[1]?.init?.headers).get("Content-Type"), "application/json");
+  assert.equal(new Headers(calls[1]?.init?.headers).get("If-Match"), '"1"');
+  assert.equal(new Headers(calls[2]?.init?.headers).get("If-Match"), '"2"');
+  assert.equal(edited.ok && edited.value.version, 2);
+  assert.equal(nextEdit.ok && nextEdit.value.version, 3);
   assert.equal(JSON.parse(String(calls[1]?.init?.body)).program, "Updated program");
 });
 
@@ -202,6 +217,30 @@ test("validation and server failures retain the submitted form values", async ()
   assert.equal(apiCalls, 1);
 });
 
+test("Education client keeps unsaved edits on 409 and never retries with a newer version", async () => {
+  const submitted = { ...validValues, program: "Unsaved concurrent edit" };
+  let calls = 0;
+  const conflict = await saveEducationRecord(item().id, submitted, mockFetch(async (_input, init) => {
+    calls += 1;
+    assert.equal(new Headers(init?.headers).get("If-Match"), '"1"');
+    return Response.json({ error: "This record changed since you opened it. Reload the latest version and reconcile your edits before saving again." }, { status: 409 });
+  }), item().version);
+  assert.equal(conflict.ok, false);
+  assert.ok(!conflict.ok && conflict.error.includes("Reload the latest version"));
+  assert.equal(educationSaveSuccessMessage(conflict, "update"), "");
+  assert.equal(submitted.program, "Unsaved concurrent edit");
+  assert.equal(calls, 1);
+});
+
+test("failed Education updates never produce a success announcement", async () => {
+  const result = await saveEducationRecord(item().id, { ...validValues, program: "Unconfirmed update" }, mockFetch(async () =>
+    Response.json({ error: "Unable to update the Education record." }, { status: 500 }),
+  ), item().version);
+
+  assert.equal(result.ok, false);
+  assert.equal(educationSaveSuccessMessage(result, "update"), "");
+});
+
 test("expired sessions and malformed list responses produce safe UI errors", async () => {
   const unauthorized = await loadEducationRecords(mockFetch(async () =>
     Response.json({ error: "Authentication is required." }, { status: 401 }),
@@ -213,24 +252,75 @@ test("expired sessions and malformed list responses produce safe UI errors", asy
   assert.equal(malformed.ok, false);
 });
 
-test("delete only sends a bodyless request after confirmation", async () => {
+test("delete sends the loaded version only after confirmation and preserves stale-delete errors", async () => {
   let calls = 0;
   const fetcher = mockFetch(async (_input, init) => {
     calls += 1;
     assert.equal(init?.method, "DELETE");
     assert.equal(init?.body, undefined);
-    assert.equal(init?.headers, undefined);
+    assert.equal(new Headers(init?.headers).get("If-Match"), '"2"');
     return Response.json({ success: true });
   });
 
-  const cancelled = await deleteEducationRecord(item().id, false, fetcher);
+  const cancelled = await deleteEducationRecord(item().id, 2, false, fetcher);
   assert.equal(cancelled.ok, false);
   assert.ok(!cancelled.ok && cancelled.cancelled);
   assert.equal(calls, 0);
 
-  const confirmed = await deleteEducationRecord(item().id, true, fetcher);
+  const confirmed = await deleteEducationRecord(item().id, 2, true, fetcher);
   assert.equal(confirmed.ok, true);
   assert.equal(calls, 1);
+
+  const invalidVersion = await deleteEducationRecord(item().id, 0, true, fetcher);
+  assert.equal(invalidVersion.ok, false);
+  assert.equal(calls, 1);
+
+  const conflict = await deleteEducationRecord(
+    item().id,
+    1,
+    true,
+    mockFetch(async () => Response.json({
+      error: "This Education record changed since it was loaded. It was not deleted; reload the latest version before trying again.",
+    }, { status: 409 })),
+  );
+  assert.equal(conflict.ok, false);
+  assert.ok(!conflict.ok && /was not deleted/u.test(conflict.error));
+  assert.ok(!conflict.ok && conflict.outcome === "definite");
+
+  const ambiguous = await deleteEducationRecord(
+    item().id,
+    2,
+    true,
+    mockFetch(async () => { throw new Error("connection lost"); }),
+  );
+  assert.equal(ambiguous.ok, false);
+  assert.ok(!ambiguous.ok && /Unable to confirm whether/u.test(ambiguous.error));
+  assert.ok(!ambiguous.ok && ambiguous.outcome === "unknown");
+
+  const malformedSuccess = await deleteEducationRecord(
+    item().id,
+    2,
+    true,
+    mockFetch(async () => Response.json({ unexpected: true })),
+  );
+  assert.equal(malformedSuccess.ok, false);
+  assert.ok(!malformedSuccess.ok && malformedSuccess.outcome === "unknown");
+});
+
+test("Education manager retains the pending record and list when DELETE fails", async () => {
+  const source = await readFile(
+    new URL("../src/app/admin/education/education-manager.tsx", import.meta.url),
+    "utf8",
+  );
+  const confirmDelete = source.slice(source.indexOf("async function confirmDelete()"), source.indexOf("return (", source.indexOf("async function confirmDelete()")));
+  const failureBranch = confirmDelete.indexOf("if (!result.ok)");
+  const failureReturn = confirmDelete.indexOf("return;", failureBranch);
+  const clearPending = confirmDelete.indexOf("setPendingDelete(null)");
+
+  assert.match(confirmDelete, /deleteEducationRecord\(pendingDelete\.id, pendingDelete\.version, true\)/u);
+  assert.ok(failureBranch >= 0 && failureReturn > failureBranch);
+  assert.ok(clearPending > failureReturn);
+  assert.doesNotMatch(confirmDelete.slice(failureBranch, failureReturn), /setItems\(|setPendingDelete\(null\)|refreshRecords\(/u);
 });
 
 test("submission lock prevents duplicate requests and releases after completion", async () => {
@@ -252,6 +342,14 @@ test("submission lock prevents duplicate requests and releases after completion"
   assert.equal(calls, 1);
   finish();
   assert.deepEqual(await first, { started: true, value: "saved" });
+  assert.equal(lock.current, false);
+});
+
+test("submission lock releases when a save operation fails", async () => {
+  const lock = { current: false };
+  await assert.rejects(runEducationRequestOnce(lock, async () => {
+    throw new Error("request failed");
+  }));
   assert.equal(lock.current, false);
 });
 
