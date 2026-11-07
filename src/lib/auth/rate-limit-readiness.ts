@@ -1,6 +1,7 @@
 export type RateLimitEnvironment = Readonly<{
   NODE_ENV?: string;
   VERCEL?: string;
+  VERCEL_ENV?: string;
   ENABLE_LOCAL_LOGIN_RATE_LIMIT?: string;
   UPSTASH_REDIS_REST_URL?: string;
   UPSTASH_REDIS_REST_TOKEN?: string;

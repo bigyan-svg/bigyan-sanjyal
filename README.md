@@ -140,6 +140,79 @@ database migrations.
 
 ## Administrator provisioning and recovery
 
+### Neon Preview initial administrator bootstrap
+
+The repository provides a dedicated Preview-only bootstrap command:
+
+```powershell
+npm run admin:preview:bootstrap
+```
+
+This command is separate from the Production operator and cannot recover,
+reset, or reactivate an existing account. It creates an active `ADMIN` only when
+the `AdminUser` table is empty.
+
+Before running it:
+
+1. Verify that the operator checkout is `phase35-release-source` at the approved
+   commit.
+2. Confirm the Neon branch is named `preview`, branch ID
+   `br-muddy-glitter-b3nag8q7`, and database name `neondb`.
+3. Independently verify the Neon Preview pooled/runtime endpoint hostname
+   `ep-patient-frost-b34hmovu-pooler.c-4.ap-southeast-1.aws.neon.tech`, or the
+   exact direct hostname
+   `ep-patient-frost-b34hmovu.c-4.ap-southeast-1.aws.neon.tech`.
+4. Run the command from a normal interactive PowerShell or VS Code terminal.
+   Do not run it through a redirected, non-interactive, or automated shell.
+5. Obtain the Preview pooled/runtime `DATABASE_URL` from the approved secret
+   source. Do not copy credentials into command arguments, shell history, source
+   files, logs, chat, or documentation.
+
+In PowerShell, supply the secret directly in process memory with `Read-Host`.
+This example does not print the URL:
+
+```powershell
+$secureDatabaseUrl = Read-Host "Neon Preview DATABASE_URL" -AsSecureString
+$databaseUrlPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureDatabaseUrl)
+
+try {
+    $env:DATABASE_URL = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($databaseUrlPtr)
+}
+finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($databaseUrlPtr)
+}
+Remove-Variable secureDatabaseUrl, databaseUrlPtr
+```
+
+Run the bootstrap from the same PowerShell process:
+
+```powershell
+npm run admin:preview:bootstrap
+```
+
+The command requires an exact Preview-specific typed confirmation immediately
+before the database transaction. It prints only sanitized database host and
+name information. It prompts for the administrator email, then hidden password
+and password-confirmation values.
+Passwords must contain 12–1,024 characters. The password is hashed with the
+existing Argon2id implementation.
+
+The command rejects malformed URLs, missing credentials, wrong databases,
+unexpected ports, host override parameters, unknown hosts, and Production
+endpoints. It also acquires a PostgreSQL advisory lock and uses a serializable
+transaction while checking that the `AdminUser` table remains empty.
+The concurrent provisioning unit test is a mocked transaction-store test; it
+does not prove PostgreSQL advisory-lock behavior. Database-level concurrency
+must not be represented as integration-tested until run safely against an
+explicitly isolated disposable PostgreSQL test database.
+
+Always verify the successful email-visible sign-in in Preview, then use the
+authenticated password-change flow. Clear the process environment afterward:
+
+```powershell
+Remove-Item Env:DATABASE_URL
+```
+
 The operator-only CLI supports creating the first administrator and recovering
 an existing active administrator. It is not an application route, and it is not
 run by install, build, migration, or deployment commands. Run it only from an

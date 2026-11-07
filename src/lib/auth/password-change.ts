@@ -52,7 +52,7 @@ interface PasswordChangeInput {
 }
 
 function jsonResponse(
-  body: { success: true } | { error: string },
+  body: { success: true; sessionCookieCleared: boolean } | { error: string },
   status: number,
   additionalHeaders: Record<string, string> = {},
 ): Response {
@@ -255,9 +255,12 @@ export async function handlePasswordChange(
       throw error;
     }
 
-    await dependencies.clearSessionCookie();
-
-    return jsonResponse({ success: true }, 200);
+    try {
+      await dependencies.clearSessionCookie();
+      return jsonResponse({ success: true, sessionCookieCleared: true }, 200);
+    } catch {
+      return jsonResponse({ success: true, sessionCookieCleared: false }, 200);
+    }
   } catch {
     return jsonResponse({ error: PASSWORD_CHANGE_ERROR }, 500);
   }

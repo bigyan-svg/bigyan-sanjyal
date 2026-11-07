@@ -247,7 +247,10 @@ test("rejects rate-limited submissions and provides a safe retry interval", asyn
 
 test("fails closed when the rate limiter is unavailable or throws", async () => {
   for (const checkRateLimit of [
-    async () => ({ status: "unavailable" as const }),
+    async () => ({
+      status: "unavailable" as const,
+      reason: "redis_connection_error" as const,
+    }),
     async () => { throw new Error("private Redis detail"); },
   ]) {
     const { dependencies, saved } = createDependencies({ checkRateLimit });
@@ -275,7 +278,10 @@ test("the shared contact limiter fails closed without a trusted client identity"
     const request = new Request("https://example.test/api/contact", {
       headers: { "x-forwarded-for": "203.0.113.7" },
     });
-    assert.deepEqual(await checkContactSubmissionRateLimit(request), { status: "unavailable" });
+    assert.deepEqual(await checkContactSubmissionRateLimit(request), {
+      status: "unavailable",
+      reason: "trusted_ip_missing",
+    });
   } finally {
     if (originalNodeEnv === undefined) delete environment.NODE_ENV;
     else environment.NODE_ENV = originalNodeEnv;

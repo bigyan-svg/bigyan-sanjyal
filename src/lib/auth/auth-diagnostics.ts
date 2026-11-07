@@ -52,6 +52,13 @@ export type AuthDiagnosticReason =
   | "invalid-credentials"
   | "rate-limited"
   | "rate-limit-unavailable"
+  | "trusted_ip_missing"
+  | "redis_configuration_missing"
+  | "redis_url_invalid"
+  | "admin_hmac_secret_invalid"
+  | "redis_timeout"
+  | "redis_connection_error"
+  | "redis_command_error"
   | "database-error"
   | "role-not-authorized";
 
@@ -129,6 +136,7 @@ export function logAdminAuthDiagnostic(
     details,
     databaseTarget,
     process.env.NODE_ENV,
+    process.env.VERCEL_ENV,
   );
   if (serialized === null) return;
 
@@ -139,12 +147,25 @@ export function formatAdminAuthDiagnostic(
   details: AuthDiagnosticDetails,
   databaseTarget: SafeDatabaseTarget | null,
   nodeEnv: string | undefined,
+  vercelEnv?: string,
 ): string | null {
-  if (nodeEnv !== "development") return null;
+  if (nodeEnv === "development") {
+    return JSON.stringify({
+      environment: "development",
+      databaseTarget,
+      ...details,
+    });
+  }
 
-  return JSON.stringify({
-    environment: "development",
-    databaseTarget,
-    ...details,
-  });
+  if (vercelEnv === "preview") {
+    return JSON.stringify({
+      environment: "preview",
+      boundary: details.boundary,
+      outcome: details.outcome,
+      phase: details.phase,
+      reason: details.reason,
+    });
+  }
+
+  return null;
 }

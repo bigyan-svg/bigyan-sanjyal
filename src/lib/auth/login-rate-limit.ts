@@ -69,7 +69,20 @@ type RequestLimiters = {
 export type AdminLoginRateLimitResult =
   | { status: "allowed" }
   | { status: "limited"; retryAfterSeconds: number }
-  | { status: "unavailable" };
+  | {
+      status: "unavailable";
+      reason:
+        | "trusted_ip_missing"
+        | "redis_configuration_missing"
+        | "redis_url_invalid"
+        | "admin_hmac_secret_invalid"
+        | "redis_timeout"
+        | "redis_connection_error"
+        | "redis_command_error";
+    };
+
+export type AdminLoginUnavailableReason =
+  Extract<AdminLoginRateLimitResult, { status: "unavailable" }>["reason"];
 
 type RateLimitDecision = {
   success: boolean;
@@ -93,7 +106,10 @@ export type AdminLoginRateLimitBackend = {
 export type ContactRateLimitResult =
   | { status: "allowed" }
   | { status: "limited"; retryAfterSeconds: number }
-  | { status: "unavailable" };
+  | {
+      status: "unavailable";
+      reason: AdminLoginUnavailableReason;
+    };
 
 let cachedLimiters: RequestLimiters | undefined;
 
@@ -266,14 +282,29 @@ export async function checkAdminLoginRateLimit(
   const clientIp = getTrustedClientIp(request);
 
   if (!clientIp) {
-    return { status: "unavailable" };
+    return { status: "unavailable", reason: "trusted_ip_missing" };
   }
 
   try {
     const limiters = backend ?? getLimiters();
 
     if (!limiters) {
-      return { status: "unavailable" };
+      const readiness = getRateLimitReadiness(process.env);
+      if (!readiness.redisConfigurationReady) {
+        const configurationMissing =
+          !readiness.redisUrlConfigured ||
+          !readiness.redisTokenConfigured ||
+          !readiness.hmacSecretConfigured;
+        return {
+          status: "unavailable",
+          reason: configurationMissing
+            ? "redis_configuration_missing"
+            : !readiness.redisUrlValid
+              ? "redis_url_invalid"
+              : "admin_hmac_secret_invalid",
+        };
+      }
+      return { status: "unavailable", reason: "redis_connection_error" };
     }
 
     const ipIdentifier = createRateLimitPseudonym(
@@ -300,7 +331,7 @@ export async function checkAdminLoginRateLimit(
     ]);
 
     if (results.some((result) => result.reason === "timeout")) {
-      return { status: "unavailable" };
+      return { status: "unavailable", reason: "redis_timeout" };
     }
 
     const blockedResults = results.filter((result) => !result.success);
@@ -315,9 +346,65 @@ export async function checkAdminLoginRateLimit(
       status: "limited",
       retryAfterSeconds: Math.max(1, Math.ceil((nextAllowedAt - Date.now()) / 1_000)),
     };
-  } catch {
-    return { status: "unavailable" };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      reason: classifyRedisFailure(error),
+    };
   }
+}
+
+function classifyRedisFailure(error: unknown): AdminLoginUnavailableReason {
+  const timeoutCodes = new Set(["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"]);
+  const connectionCodes = new Set([
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "EPIPE",
+  ]);
+  const visited = new Set<object>();
+  const names: string[] = [];
+  const codes: string[] = [];
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth++) {
+    if (visited.has(current)) break;
+    visited.add(current);
+
+    const classifiedError = current as {
+      name?: unknown;
+      code?: unknown;
+      cause?: unknown;
+    };
+    const name = typeof classifiedError.name === "string"
+      ? classifiedError.name.toLowerCase()
+      : "";
+    const code = typeof classifiedError.code === "string"
+      ? classifiedError.code.toUpperCase()
+      : "";
+    if (name) names.push(name);
+    if (code) codes.push(code);
+    current = classifiedError.cause;
+  }
+
+  if (
+    names.some((name) => name.includes("timeout")) ||
+    codes.some((code) => timeoutCodes.has(code))
+  ) {
+    return "redis_timeout";
+  }
+
+  if (
+    codes.some((code) => connectionCodes.has(code)) ||
+    names.some((name) => name.includes("connection"))
+  ) {
+    return "redis_connection_error";
+  }
+
+  return "redis_command_error";
 }
 
 export async function checkAdminPasswordChangeRateLimit(
@@ -327,14 +414,14 @@ export async function checkAdminPasswordChangeRateLimit(
   const clientIp = getTrustedClientIp(request);
 
   if (!clientIp) {
-    return { status: "unavailable" };
+    return { status: "unavailable", reason: "trusted_ip_missing" };
   }
 
   try {
     const limiters = getLimiters();
 
     if (!limiters) {
-      return { status: "unavailable" };
+      return { status: "unavailable", reason: getRedisConfigurationUnavailableReason() };
     }
 
     const adminIpIdentifier = createRateLimitPseudonym(
@@ -347,7 +434,7 @@ export async function checkAdminPasswordChangeRateLimit(
     );
 
     if (result.reason === "timeout") {
-      return { status: "unavailable" };
+      return { status: "unavailable", reason: "redis_timeout" };
     }
 
     if (result.success) {
@@ -358,8 +445,8 @@ export async function checkAdminPasswordChangeRateLimit(
       status: "limited",
       retryAfterSeconds: Math.max(1, Math.ceil((result.reset - Date.now()) / 1_000)),
     };
-  } catch {
-    return { status: "unavailable" };
+  } catch (error) {
+    return { status: "unavailable", reason: classifyRedisFailure(error) };
   }
 }
 
@@ -369,14 +456,14 @@ export async function checkContactSubmissionRateLimit(
   const clientIp = getTrustedClientIp(request);
 
   if (!clientIp) {
-    return { status: "unavailable" };
+    return { status: "unavailable", reason: "trusted_ip_missing" };
   }
 
   try {
     const limiters = getLimiters();
 
     if (!limiters) {
-      return { status: "unavailable" };
+      return { status: "unavailable", reason: getRedisConfigurationUnavailableReason() };
     }
 
     const identifier = createRateLimitPseudonym(
@@ -390,7 +477,7 @@ export async function checkContactSubmissionRateLimit(
     ]);
 
     if (results.some((result) => result.reason === "timeout")) {
-      return { status: "unavailable" };
+      return { status: "unavailable", reason: "redis_timeout" };
     }
 
     const blockedResults = results.filter((result) => !result.success);
@@ -403,7 +490,18 @@ export async function checkContactSubmissionRateLimit(
       status: "limited",
       retryAfterSeconds: Math.max(1, Math.ceil((nextAllowedAt - Date.now()) / 1_000)),
     };
-  } catch {
-    return { status: "unavailable" };
+  } catch (error) {
+    return { status: "unavailable", reason: classifyRedisFailure(error) };
   }
+}
+
+function getRedisConfigurationUnavailableReason(): AdminLoginUnavailableReason {
+  const readiness = getRateLimitReadiness(process.env);
+  const missing =
+    !readiness.redisUrlConfigured ||
+    !readiness.redisTokenConfigured ||
+    !readiness.hmacSecretConfigured;
+  if (missing) return "redis_configuration_missing";
+  if (!readiness.redisUrlValid) return "redis_url_invalid";
+  return "admin_hmac_secret_invalid";
 }

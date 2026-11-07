@@ -12,6 +12,7 @@
     "test": "node --conditions=react-server --import=tsx --test tests/*.test.ts",
     "db:generate": "prisma generate --config prisma7.config.ts",
     "admin:operator": "node --conditions=react-server --import=tsx scripts/admin-operator.ts",
+    "admin:preview:bootstrap": "node --conditions=react-server --import=tsx scripts/admin-preview-bootstrap.ts",
     "db:migrate": "prisma migrate dev --config prisma.migrate.config.ts",
     "db:migrate:deploy": "prisma migrate deploy --config prisma.deploy.config.ts",
     "db:studio": "prisma studio",

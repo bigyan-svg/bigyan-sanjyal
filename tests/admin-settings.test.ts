@@ -78,16 +78,21 @@ test("request payload contains only the three documented password fields", () =>
   ]);
 });
 
-test("successful API response is accepted and clears no server details into the result", async () => {
+test("successful API responses preserve cookie-clear state without exposing server details", async () => {
   let requestedUrl = "";
   let requestInit: RequestInit | undefined;
-  const result = await requestPasswordChange(validValues(), async (input, init) => {
+  const clearedResult = await requestPasswordChange(validValues(), async (input, init) => {
     requestedUrl = String(input);
     requestInit = init;
-    return Response.json({ success: true });
+    return Response.json({ success: true, sessionCookieCleared: true });
   });
 
-  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(clearedResult, { ok: true, sessionCookieCleared: true });
+
+  const unclearedResult = await requestPasswordChange(validValues(), async () =>
+    Response.json({ success: true, sessionCookieCleared: false }),
+  );
+  assert.deepEqual(unclearedResult, { ok: true, sessionCookieCleared: false });
   assert.equal(requestedUrl, "/api/auth/change-password");
   assert.equal(requestInit?.method, "POST");
   assert.equal(requestInit?.credentials, "same-origin");
@@ -100,6 +105,16 @@ test("does not accept malformed success responses or surface server response bod
     Response.json({ success: "true", error: "internal detail" }),
   );
   assert.deepEqual(malformed, { ok: false, reason: "unexpected" });
+
+  const missingCookieState = await requestPasswordChange(validValues(), async () =>
+    Response.json({ success: true }),
+  );
+  assert.deepEqual(missingCookieState, { ok: false, reason: "unexpected" });
+
+  const invalidCookieState = await requestPasswordChange(validValues(), async () =>
+    Response.json({ success: true, sessionCookieCleared: "false" }),
+  );
+  assert.deepEqual(invalidCookieState, { ok: false, reason: "unexpected" });
 
   const serverFailure = await requestPasswordChange(validValues(), async () =>
     Response.json({ error: "private server detail" }, { status: 500 }),

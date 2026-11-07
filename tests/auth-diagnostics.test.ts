@@ -34,6 +34,51 @@ test("authentication diagnostics are disabled outside development", () => {
   );
 });
 
+test("Preview authentication diagnostics emit only allowlisted fixed reasons", () => {
+    const output = formatAdminAuthDiagnostic(
+      {
+        boundary: "login-api",
+        outcome: "failed",
+        phase: "rate-limit",
+        reason: "redis_connection_error",
+      },
+      {
+        host: "database.example.test",
+        port: "5432",
+        database: "neondb",
+      },
+      "production",
+      "preview",
+    );
+
+    assert.ok(output);
+    assert.deepEqual(JSON.parse(output), {
+      environment: "preview",
+      boundary: "login-api",
+      outcome: "failed",
+      phase: "rate-limit",
+      reason: "redis_connection_error",
+    });
+    assert.doesNotMatch(output, /database\.example\.test|neondb/u);
+});
+
+test("production authentication diagnostics are suppressed even without Preview scope", () => {
+    assert.equal(
+      formatAdminAuthDiagnostic(
+        {
+          boundary: "login-api",
+          outcome: "failed",
+          phase: "rate-limit",
+          reason: "redis_command_error",
+        },
+        null,
+        "production",
+        "production",
+      ),
+      null,
+    );
+});
+
 test("development diagnostics only emit the safe identity and allowlisted state", () => {
   const output = formatAdminAuthDiagnostic(
     {

@@ -165,7 +165,7 @@ export async function POST(request: Request): Promise<Response> {
       boundary: "login-api",
       outcome: "failed",
       phase: "rate-limit",
-      reason: "rate-limit-unavailable",
+      reason: rateLimit.reason,
     });
     return jsonError("Login is temporarily unavailable.", 503);
   }

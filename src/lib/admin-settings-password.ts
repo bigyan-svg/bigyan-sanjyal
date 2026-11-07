@@ -62,7 +62,7 @@ export type PasswordChangeFailure =
   | "unexpected";
 
 export type PasswordChangeResult =
-  | { ok: true }
+  | { ok: true; sessionCookieCleared: boolean }
   | { ok: false; reason: PasswordChangeFailure };
 
 export function passwordChangeFailureMessage(reason: PasswordChangeFailure): string {
@@ -121,9 +121,11 @@ export async function requestPasswordChange(
     typeof body === "object" &&
     body !== null &&
     "success" in body &&
-    body.success === true
+    body.success === true &&
+    "sessionCookieCleared" in body &&
+    typeof body.sessionCookieCleared === "boolean"
   ) {
-    return { ok: true };
+    return { ok: true, sessionCookieCleared: body.sessionCookieCleared };
   }
 
   return { ok: false, reason: "unexpected" };

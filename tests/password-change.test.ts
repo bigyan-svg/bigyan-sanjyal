@@ -111,7 +111,10 @@ test("changes a password through the existing verification and revocation flow",
   const response = await handlePasswordChange(makeRequest(validBody()), dependencies);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { success: true });
+  assert.deepEqual(await response.json(), {
+    success: true,
+    sessionCookieCleared: true,
+  });
   assert.deepEqual(calls.verifyPassword, [["current-password", "stored-password-hash"]]);
   assert.deepEqual(calls.hashPassword, ["a-new-password-longer-than-twelve"]);
   assert.deepEqual(calls.updatePasswordAndRevokeSessions, [[
@@ -120,6 +123,25 @@ test("changes a password through the existing verification and revocation flow",
     "stored-password-hash",
     "new-password-hash",
   ]]);
+  assert.equal(calls.clearSessionCookie, 1);
+  await assertNoStore(response);
+});
+
+test("reports committed password changes when clearing the current cookie fails", async () => {
+  const { calls, dependencies } = createFixture({
+    clearSessionCookie: async () => {
+      calls.clearSessionCookie += 1;
+      throw new Error("private cookie-store details");
+    },
+  });
+  const response = await handlePasswordChange(makeRequest(validBody()), dependencies);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    success: true,
+    sessionCookieCleared: false,
+  });
+  assert.equal(calls.updatePasswordAndRevokeSessions.length, 1);
   assert.equal(calls.clearSessionCookie, 1);
   await assertNoStore(response);
 });
@@ -278,7 +300,10 @@ test("rejects rate-limited requests and fails closed when the limiter is unavail
   await assertNoStore(limitedResponse);
 
   const unavailableFixture = createFixture({
-    checkRateLimit: async () => ({ status: "unavailable" }),
+    checkRateLimit: async () => ({
+      status: "unavailable",
+      reason: "redis_connection_error",
+    }),
   });
   const unavailableResponse = await handlePasswordChange(
     makeRequest(validBody()),

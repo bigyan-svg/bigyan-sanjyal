@@ -86,6 +86,16 @@ test("uses only the valid Vercel-provided client IP header on Vercel", () => {
   );
 });
 
+test("missing or invalid trusted client IP maps to a safe unavailable reason", async () => {
+  assert.deepEqual(
+    await checkAdminLoginRateLimit(
+      request(),
+      "admin@example.test",
+    ),
+    { status: "unavailable", reason: "trusted_ip_missing" },
+  );
+});
+
 test("fails closed when Vercel's trusted client IP header is missing or invalid", () => {
   assert.equal(
     getTrustedClientIp(
@@ -219,6 +229,46 @@ test("readiness rejects malformed Redis URLs and missing or weak HMAC secrets", 
   assert.ok(malformedUrl.issues.includes("upstash-url-invalid"));
 });
 
+test("HMAC secret minimum is measured in UTF-8 bytes", () => {
+  const utf8 = new TextEncoder();
+  const thirtyOneByteSecret = "a".repeat(31);
+  const thirtyTwoByteAsciiSecret = "a".repeat(32);
+  const thirtyTwoByteNonAsciiSecret = "é".repeat(16);
+  const belowThirtyTwoByteSecret = "é".repeat(15);
+
+  assert.equal(utf8.encode(thirtyOneByteSecret).byteLength, 31);
+  assert.equal(utf8.encode(thirtyTwoByteAsciiSecret).byteLength, 32);
+  assert.ok(thirtyTwoByteNonAsciiSecret.length < 32);
+  assert.equal(utf8.encode(thirtyTwoByteNonAsciiSecret).byteLength, 32);
+  assert.ok(utf8.encode(belowThirtyTwoByteSecret).byteLength < 32);
+
+  const thirtyOneByteReadiness = getRateLimitReadiness({
+    ...validProductionEnvironment,
+    ADMIN_RATE_LIMIT_HMAC_SECRET: thirtyOneByteSecret,
+  });
+  assert.equal(thirtyOneByteReadiness.hmacSecretStrong, false);
+  assert.ok(thirtyOneByteReadiness.issues.includes("hmac-secret-too-short"));
+
+  const thirtyTwoByteAsciiReadiness = getRateLimitReadiness({
+    ...validProductionEnvironment,
+    ADMIN_RATE_LIMIT_HMAC_SECRET: thirtyTwoByteAsciiSecret,
+  });
+  assert.equal(thirtyTwoByteAsciiReadiness.hmacSecretStrong, true);
+
+  const thirtyTwoByteNonAsciiReadiness = getRateLimitReadiness({
+    ...validProductionEnvironment,
+    ADMIN_RATE_LIMIT_HMAC_SECRET: thirtyTwoByteNonAsciiSecret,
+  });
+  assert.equal(thirtyTwoByteNonAsciiReadiness.hmacSecretStrong, true);
+
+  const belowThirtyTwoByteReadiness = getRateLimitReadiness({
+    ...validProductionEnvironment,
+    ADMIN_RATE_LIMIT_HMAC_SECRET: belowThirtyTwoByteSecret,
+  });
+  assert.equal(belowThirtyTwoByteReadiness.hmacSecretStrong, false);
+  assert.ok(belowThirtyTwoByteReadiness.issues.includes("hmac-secret-too-short"));
+});
+
 test("configured direct Vercel and Upstash settings report ready", () => {
   const readiness = getRateLimitReadiness(validProductionEnvironment);
 
@@ -250,12 +300,15 @@ test("login, password-change, and contact limiters fail closed without Upstash c
     const trustedRequest = request({ "x-vercel-forwarded-for": "203.0.113.24" });
     assert.deepEqual(await checkAdminLoginRateLimit(trustedRequest, "admin@example.test"), {
       status: "unavailable",
+      reason: "redis_configuration_missing",
     });
     assert.deepEqual(await checkAdminPasswordChangeRateLimit(trustedRequest, "test-admin-id"), {
       status: "unavailable",
+      reason: "redis_configuration_missing",
     });
     assert.deepEqual(await checkContactSubmissionRateLimit(trustedRequest), {
       status: "unavailable",
+      reason: "redis_configuration_missing",
     });
   } finally {
     restore();
@@ -405,13 +458,14 @@ test("login rate limiting fails closed for Redis errors and timeout decisions", 
       }
       return { success: true, reset: Date.now() + 60_000 };
     });
+
     assert.deepEqual(
       await checkAdminLoginRateLimit(
         trustedLoginRequest("203.0.113.9"),
         "admin@example.test",
         rejectingBackend,
       ),
-      { status: "unavailable" },
+      { status: "unavailable", reason: "redis_command_error" },
     );
 
     const timeoutBackend = makeRateLimitBackend(async (limiterName) => ({
@@ -425,10 +479,124 @@ test("login rate limiting fails closed for Redis errors and timeout decisions", 
         "admin@example.test",
         timeoutBackend,
       ),
-      { status: "unavailable" },
+      { status: "unavailable", reason: "redis_timeout" },
     );
   } finally {
     restore();
+  }
+});
+
+test("login rate limiting distinguishes invalid Redis configuration and connection failures", async () => {
+  const restoreEnvironment = saveEnvironment([
+    "NODE_ENV",
+    "VERCEL",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN",
+    "ADMIN_RATE_LIMIT_HMAC_SECRET",
+  ]);
+  const environment = process.env as Record<string, string | undefined>;
+  environment.NODE_ENV = "production";
+  environment.VERCEL = "1";
+
+  try {
+    environment.UPSTASH_REDIS_REST_URL = "not-a-url";
+    environment.UPSTASH_REDIS_REST_TOKEN = "configured-token";
+    environment.ADMIN_RATE_LIMIT_HMAC_SECRET =
+      "a-test-only-secret-that-is-at-least-32-bytes";
+
+    assert.deepEqual(
+      await checkAdminLoginRateLimit(
+        trustedLoginRequest("203.0.113.9"),
+        "admin@example.test",
+      ),
+      { status: "unavailable", reason: "redis_url_invalid" },
+    );
+
+    environment.UPSTASH_REDIS_REST_URL = "https://example.upstash.io";
+    environment.ADMIN_RATE_LIMIT_HMAC_SECRET = "short-secret";
+    assert.deepEqual(
+      await checkAdminLoginRateLimit(
+        trustedLoginRequest("203.0.113.9"),
+        "admin@example.test",
+      ),
+      { status: "unavailable", reason: "admin_hmac_secret_invalid" },
+    );
+
+    const connectionError = Object.assign(new Error("private"), {
+      code: "ECONNREFUSED",
+    });
+    const connectionBackend = makeRateLimitBackend(async () => {
+      throw connectionError;
+    });
+    assert.deepEqual(
+      await checkAdminLoginRateLimit(
+        trustedLoginRequest("203.0.113.9"),
+        "admin@example.test",
+        connectionBackend,
+      ),
+      { status: "unavailable", reason: "redis_connection_error" },
+    );
+
+    for (const code of [
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+    ]) {
+      const nestedConnectionError = new Error("private outer error", {
+        cause: Object.assign(new Error("private nested error"), { code }),
+      });
+      const nestedConnectionBackend = makeRateLimitBackend(async () => {
+        throw nestedConnectionError;
+      });
+      assert.deepEqual(
+        await checkAdminLoginRateLimit(
+          trustedLoginRequest("203.0.113.10"),
+          "admin@example.test",
+          nestedConnectionBackend,
+        ),
+        { status: "unavailable", reason: "redis_connection_error" },
+        `${code} nested cause`,
+      );
+    }
+
+    for (const code of ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"]) {
+      const nestedTimeoutError = new Error("private outer error", {
+        cause: Object.assign(new Error("private nested error"), { code }),
+      });
+      const nestedTimeoutBackend = makeRateLimitBackend(async () => {
+        throw nestedTimeoutError;
+      });
+      assert.deepEqual(
+        await checkAdminLoginRateLimit(
+          trustedLoginRequest("203.0.113.12"),
+          "admin@example.test",
+          nestedTimeoutBackend,
+        ),
+        { status: "unavailable", reason: "redis_timeout" },
+        `${code} nested timeout cause`,
+      );
+    }
+
+    const circularConnectionError = Object.assign(
+      new Error("private outer error"),
+      { code: "ECONNREFUSED" },
+    );
+    (circularConnectionError as Error & { cause?: unknown }).cause =
+      circularConnectionError;
+    const circularConnectionBackend = makeRateLimitBackend(async () => {
+      throw circularConnectionError;
+    });
+    assert.deepEqual(
+      await checkAdminLoginRateLimit(
+        trustedLoginRequest("203.0.113.11"),
+        "admin@example.test",
+        circularConnectionBackend,
+      ),
+      { status: "unavailable", reason: "redis_connection_error" },
+    );
+  } finally {
+    restoreEnvironment();
   }
 });
 
