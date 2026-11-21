@@ -6891,3 +6891,91 @@ dialog.project-lightbox::backdrop {
     transition-duration: .01ms !important;
   }
 }
+
+
+/* Phase 2: unify public content pages with the crystal-white visual system. */
+.page-intro h1 { color: #17243a; }
+.public-projects__card {
+  border-color: rgb(113 139 179 / 18%);
+  background: linear-gradient(145deg, rgb(255 255 255 / 96%), rgb(245 249 255 / 92%));
+  box-shadow: 0 1rem 2.7rem rgb(42 71 115 / 7%), inset 0 1px 0 #fff;
+}
+.public-projects__card--featured {
+  border-color: rgb(76 145 232 / 36%);
+  box-shadow: 0 1rem 2.8rem rgb(47 91 151 / 10%), 0 0 2rem rgb(84 151 237 / 7%);
+}
+.public-projects__image {
+  border-color: rgb(112 143 187 / 18%);
+  background: #eaf1fa;
+}
+.public-projects__primary-image {
+  border-color: rgb(83 147 230 / 34%);
+  color: #245fae;
+  background: rgb(255 255 255 / 91%);
+  box-shadow: 0 0.2rem 0.65rem rgb(34 67 114 / 9%);
+}
+.public-projects__card h2, .public-projects__card h3 { color: #1c2d46; }
+.public-projects__card p { color: #566780; }
+.public-projects__links a {
+  border-color: rgb(94 137 194 / 22%);
+  background: rgb(255 255 255 / 76%);
+  color: #3477cb;
+}
+.public-projects__links a:hover {
+  border-color: rgb(67 132 225 / 40%);
+  background: #fff;
+}
+
+.public-blog__filter-panel {
+  border-color: rgb(105 133 174 / 18%);
+  background: linear-gradient(145deg, rgb(255 255 255 / 87%), rgb(243 248 255 / 80%));
+  box-shadow: 0 0.6rem 1.8rem rgb(41 69 111 / 4%);
+}
+.public-blog__category, .public-blog__tags li {
+  border-color: rgb(57 127 232 / 19%);
+  color: #356eb7;
+  background: rgb(226 239 255 / 74%);
+}
+.public-blog__tags { color: #64758e; }
+.public-blog__read-link { color: #3477cb; }
+.public-blog__read-link:hover { color: #175db1; }
+
+.contact-form__notice {
+  border-color: rgb(93 148 216 / 21%);
+  background: rgb(235 244 255 / 82%);
+  color: #3b6397;
+}
+.contact-form__notice strong { color: #244d7d; }
+.contact-form__notice p { color: #5b7391; }
+.contact-form__feedback--success {
+  border-color: rgb(34 157 119 / 25%);
+  background: rgb(228 248 240 / 92%);
+  color: #17684f;
+}
+.contact-form__feedback--success strong { color: #145b45; }
+.contact-form__feedback--server-error,
+.contact-form__feedback--rate-limited,
+.contact-form__feedback--validation-error {
+  border-color: rgb(210 145 49 / 27%);
+  background: rgb(255 247 230 / 94%);
+  color: #855719;
+}
+.contact-form__feedback--server-error strong,
+.contact-form__feedback--rate-limited strong,
+.contact-form__feedback--validation-error strong { color: #71480e; }
+
+.form-field__label { color: #405572; }
+.site-footer {
+  background: linear-gradient(180deg, rgb(245 249 255 / 72%), rgb(237 243 252 / 94%));
+}
+.site-footer__nav a, .back-to-top { color: #526985; }
+.site-footer__nav a:hover, .back-to-top:hover { color: #286bbd; }
+
+/* Keep content cards responsive and avoid hover motion on touch-only devices. */
+@media (hover: hover) and (pointer: fine) {
+  .public-projects__card:hover {
+    transform: translateY(-3px);
+    border-color: rgb(83 145 226 / 36%);
+    box-shadow: 0 1.3rem 3rem rgb(42 77 132 / 10%);
+  }
+}
