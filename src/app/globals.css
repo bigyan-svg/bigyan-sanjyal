@@ -6979,3 +6979,27 @@ dialog.project-lightbox::backdrop {
     box-shadow: 0 1.3rem 3rem rgb(42 77 132 / 10%);
   }
 }
+
+
+/* Phase 3: the user's preferred pearl-white crystal and champagne-gold backdrop. */
+html {
+  background-color: #f8f7f8;
+  background-image: url("/images/crystal-wave-background.svg");
+  background-position: center top;
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+body {
+  background: transparent;
+  background-color: transparent;
+}
+
+@media (max-width: 48rem) {
+  html {
+    background-attachment: scroll;
+    background-size: auto 100vh;
+    background-position: center top;
+  }
+}
