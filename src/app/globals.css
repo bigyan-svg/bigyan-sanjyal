@@ -7636,3 +7636,32 @@ body, p, li, label, small, strong, .brand__name,
   .hero-profile__image { transform: none !important; }
   .technology-chip:hover { transform: none; }
 }
+
+/* Scroll-performance pass: keep native input responsive and avoid perpetual paint/compositing work. */
+html {
+  /* Native scrolling follows wheel, trackpad and touch input without animation lag. */
+  scroll-behavior: auto;
+}
+
+/* Keep the translucent header, but reduce the area and cost of its backdrop blur. */
+.site-header {
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+/* Large translucent surfaces otherwise trigger repeated backdrop sampling while scrolling. */
+.card,
+.public-projects__card,
+.public-education__entry,
+.hero__footnote {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Decorative loops are attractive but continuously consume compositing resources. */
+.hero-art__glow,
+.hero-art__ring--outer,
+.hero-art__ring--inner,
+.button--primary {
+  animation: none !important;
+}
