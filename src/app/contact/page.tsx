@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Suspense } from "react";
+
 import {
   Mail,
   Code2,
@@ -25,82 +25,69 @@ export const metadata: Metadata = {
   },
 };
 
-function socialIcon(label: string) {
-  const value = label.toLowerCase();
-  if (value.includes("facebook")) return Users;
-  if (value.includes("github")) return Code2;
-  if (value.includes("linkedin")) return BriefcaseBusiness;
-  if (value.includes("whatsapp")) return MessageCircle;
-  if (value.includes("instagram")) return Camera;
-  if (value.includes("youtube")) return CirclePlay;
-  if (value.includes("telegram")) return Send;
-  if (value.includes("mail") || value.includes("gmail") || value.includes("email")) return Mail;
-  return ExternalLink;
-}
+const contactLinks = [
+  {
+    label: "Facebook",
+    detail: "facebook.com/bigyan97",
+    href: "https://www.facebook.com/bigyan97",
+    mark: "f",
+    markClass: "facebook",
+  },
+  {
+    label: "Gmail",
+    detail: "bigyansanjyal56@gmail.com",
+    href: "mailto:bigyansanjyal56@gmail.com",
+    icon: Mail,
+  },
+  {
+    label: "LinkedIn",
+    detail: "linkedin.com/in/bigyan63",
+    href: "https://www.linkedin.com/in/bigyan63",
+    mark: "in",
+    markClass: "linkedin",
+  },
+  {
+    label: "GitHub",
+    detail: "github.com/bigyan-svg",
+    href: "https://github.com/bigyan-svg",
+    icon: Code2,
+  },
+  {
+    label: "WhatsApp",
+    detail: "bigyan.63 · +977 9769927110",
+    href: "https://wa.me/9779769927110",
+    icon: MessageCircle,
+  },
+];
 
-async function SocialProfiles() {
-  const profile = await getPublicSiteProfile();
-  const socialLinks = profile?.socialLinks ?? [];
-
-  return socialLinks.length > 0 ? (
+function ContactSocialLinks() {
+  return (
     <nav aria-label="Social and contact profiles" className="contact-social__links">
-      {socialLinks.map((link) => {
-        const Icon = socialIcon(link.label);
+      {contactLinks.map((link) => {
+        const Icon = link.icon;
         return (
           <a
             className="contact-social__link"
-            href={link.url}
-            key={link.label + link.url}
-            rel="noopener noreferrer"
-            target="_blank"
+            href={link.href}
+            key={link.label}
+            rel={link.href.startsWith("http") ? "noopener noreferrer" : undefined}
+            target={link.href.startsWith("http") ? "_blank" : undefined}
+            aria-label={`Open ${link.label}: ${link.detail}`}
           >
-            <span className="contact-social__icon" aria-hidden="true"><Icon size={20} /></span>
-            <span>{link.label}</span>
-            <ExternalLink aria-hidden="true" className="contact-social__external" size={14} />
+            <span className={`contact-social__icon ${link.markClass ? `contact-social__icon--${link.markClass}` : ""}`} aria-hidden="true">
+              {link.mark ? <span className="contact-social__brand-mark">{link.mark}</span> : Icon ? <Icon size={20} strokeWidth={1.8} /> : null}
+            </span>
+            <span className="contact-social__link-copy">
+              <span className="contact-social__link-label">{link.label}</span>
+              <span className="contact-social__link-detail">{link.detail}</span>
+            </span>
+            {link.href.startsWith("http") ? (
+              <ExternalLink aria-hidden="true" className="contact-social__external" size={14} />
+            ) : null}
           </a>
         );
       })}
     </nav>
-  ) : (
-    <p className="contact-social__empty">
-      Social profiles will appear here when they are added in the website profile settings.
-    </p>
   );
 }
 
-export default function ContactPage() {
-  return (
-    <>
-      <PageIntro
-        description="Have a question or a project idea? Send a message using the form below, or connect through my public profiles."
-        eyebrow="Contact / 06"
-        id="contact-title"
-        title="Get in touch."
-      />
-      <section aria-labelledby="contact-content-title" className="section page-content">
-        <Container>
-          <h2 className="sr-only" id="contact-content-title">Contact details and message form</h2>
-          <div className="contact-grid">
-            <Card className="contact-details" variant="outlined">
-              <span aria-hidden="true" className="destination-card__icon"><Mail size={20} /></span>
-              <p className="eyebrow">Contact details</p>
-              <h2>Connect with me.</h2>
-              <p>Use the message form or choose one of my public profiles below.</p>
-            </Card>
-            <Card className="contact-form-card" variant="glow"><ContactForm /></Card>
-          </div>
-          <section aria-labelledby="social-contact-title" className="contact-social">
-            <div className="section-heading">
-              <p className="eyebrow">Around the web</p>
-              <h2 id="social-contact-title">Find me on social platforms.</h2>
-              <p>Choose a profile to connect, follow, or send a message.</p>
-            </div>
-            <Suspense fallback={<p className="contact-social__empty">Loading public profiles…</p>}>
-              <SocialProfiles />
-            </Suspense>
-          </section>
-        </Container>
-      </section>
-    </>
-  );
-}
