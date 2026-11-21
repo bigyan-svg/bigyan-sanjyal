@@ -2,7 +2,6 @@ import type { NextConfig } from "next";
 import { getSecurityHeaders } from "./src/lib/security-headers";
 
 const nextConfig: NextConfig = {
-  images: { qualities: [95] },
   /* config options here */
   cacheComponents: true,
   partialPrefetching: true,
