@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import {
   Mail,
-  Github,
+  Code2,
   BriefcaseBusiness,
   MessageCircle,
-  Instagram,
+  Camera,
   CirclePlay,
   Send,
   ExternalLink,
@@ -27,10 +27,10 @@ export const metadata: Metadata = {
 function socialIcon(label: string) {
   const value = label.toLowerCase();
   if (value.includes("facebook")) return Users;
-  if (value.includes("github")) return Github;
+  if (value.includes("github")) return Code2;
   if (value.includes("linkedin")) return BriefcaseBusiness;
   if (value.includes("whatsapp")) return MessageCircle;
-  if (value.includes("instagram")) return Instagram;
+  if (value.includes("instagram")) return Camera;
   if (value.includes("youtube")) return CirclePlay;
   if (value.includes("telegram")) return Send;
   if (value.includes("mail") || value.includes("gmail") || value.includes("email")) return Mail;
