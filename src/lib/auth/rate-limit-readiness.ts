@@ -10,6 +10,8 @@ export type RateLimitEnvironment = Readonly<{
 
 export type RateLimitReadiness = Readonly<{
   environment: "production" | "development" | "other";
+  loginRateLimitBackend: "process-local" | "upstash" | "unavailable";
+  loginReady: boolean;
   trustedClientIpPolicy:
     | "vercel-edge-direct-ingress-only"
     | "local-development"
@@ -72,6 +74,15 @@ export function getRateLimitReadiness(
   const redisConfigurationReady =
     redisUrlValid && redisTokenConfigured && hmacSecretStrong;
   const trustedClientIpSourceConfigured = trustedClientIpPolicy !== "unavailable";
+  const localLoginRateLimitEnabled =
+    deploymentEnvironment === "development" &&
+    environment.VERCEL !== "1" &&
+    !environment.VERCEL_ENV;
+  const loginRateLimitBackend = localLoginRateLimitEnabled
+    ? "process-local"
+    : trustedClientIpSourceConfigured && redisConfigurationReady
+      ? "upstash"
+      : "unavailable";
 
   const issues: string[] = [];
   if (!trustedClientIpSourceConfigured) {
@@ -89,6 +100,8 @@ export function getRateLimitReadiness(
 
   return {
     environment: deploymentEnvironment,
+    loginRateLimitBackend,
+    loginReady: loginRateLimitBackend !== "unavailable",
     trustedClientIpPolicy,
     trustedClientIpSourceConfigured,
     redisUrlConfigured,

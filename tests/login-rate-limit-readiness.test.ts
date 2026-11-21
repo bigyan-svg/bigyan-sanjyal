@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ADMIN_RATE_LIMIT_POLICIES,
+  ProcessLocalLoginRateLimiter,
   type AdminLoginRateLimitBackend,
   createAdminLoginEmailPseudonym,
   checkAdminLoginRateLimit,
@@ -165,9 +166,14 @@ test("non-Vercel production hosts have no trusted IP source", () => {
   assert.ok(readiness.issues.includes("unsupported-production-proxy"));
 });
 
-test("local development uses its explicit opt-in identity and production does not", () => {
+test("local development uses a shared identity without trusting supplied IP headers", () => {
+  const headers = request({
+    "x-forwarded-for": "203.0.113.24",
+    "x-real-ip": "203.0.113.25",
+    "cf-connecting-ip": "203.0.113.26",
+  });
   assert.equal(
-    getTrustedClientIp(request(), {
+    getTrustedClientIp(headers, {
       NODE_ENV: "development",
       ENABLE_LOCAL_LOGIN_RATE_LIMIT: "true",
     }),
@@ -278,10 +284,20 @@ test("configured direct Vercel and Upstash settings report ready", () => {
   assert.deepEqual(readiness.issues, []);
 });
 
+test("local development login readiness uses the process-local backend without secrets", () => {
+  const readiness = getRateLimitReadiness({ NODE_ENV: "development" });
+
+  assert.equal(readiness.loginRateLimitBackend, "process-local");
+  assert.equal(readiness.loginReady, true);
+  assert.equal(readiness.redisConfigurationReady, false);
+  assert.equal(readiness.ready, false);
+});
+
 test("login, password-change, and contact limiters fail closed without Upstash configuration", async () => {
   const restore = saveEnvironment([
     "NODE_ENV",
     "VERCEL",
+    "VERCEL_ENV",
     "ENABLE_LOCAL_LOGIN_RATE_LIMIT",
     "UPSTASH_REDIS_REST_URL",
     "UPSTASH_REDIS_REST_TOKEN",
@@ -291,6 +307,7 @@ test("login, password-change, and contact limiters fail closed without Upstash c
   const environment = process.env as Record<string, string | undefined>;
   environment.NODE_ENV = "production";
   environment.VERCEL = "1";
+  environment.VERCEL_ENV = "preview";
   delete environment.ENABLE_LOCAL_LOGIN_RATE_LIMIT;
   delete environment.UPSTASH_REDIS_REST_URL;
   delete environment.UPSTASH_REDIS_REST_TOKEN;
@@ -310,6 +327,13 @@ test("login, password-change, and contact limiters fail closed without Upstash c
       status: "unavailable",
       reason: "redis_configuration_missing",
     });
+    const previewReadiness = getRateLimitReadiness({
+      NODE_ENV: "production",
+      VERCEL: "1",
+      VERCEL_ENV: "preview",
+    });
+    assert.equal(previewReadiness.loginRateLimitBackend, "unavailable");
+    assert.equal(previewReadiness.loginReady, false);
   } finally {
     restore();
   }
@@ -682,5 +706,132 @@ test("login rate-limit thresholds, windows, and namespaces are explicit", () => 
       window: "1 h",
       prefix: "contact-submit:ip:1h",
     },
+  });
+});
+
+test("local development login is rate limited without Redis and ignores spoofed IP headers", async () => {
+  const restore = saveEnvironment([
+    "NODE_ENV",
+    "VERCEL",
+    "VERCEL_ENV",
+    "ENABLE_LOCAL_LOGIN_RATE_LIMIT",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN",
+    "ADMIN_RATE_LIMIT_HMAC_SECRET",
+  ]);
+  const environment = process.env as Record<string, string | undefined>;
+  environment.NODE_ENV = "development";
+  delete environment.VERCEL;
+  delete environment.VERCEL_ENV;
+  delete environment.ENABLE_LOCAL_LOGIN_RATE_LIMIT;
+  delete environment.UPSTASH_REDIS_REST_URL;
+  delete environment.UPSTASH_REDIS_REST_TOKEN;
+  delete environment.ADMIN_RATE_LIMIT_HMAC_SECRET;
+
+  try {
+    for (
+      let attempt = 1;
+      attempt <= ADMIN_RATE_LIMIT_POLICIES.adminLoginIpFifteenMinutes.limit;
+      attempt += 1
+    ) {
+      assert.deepEqual(
+        await checkAdminLoginRateLimit(
+          request({
+            "x-forwarded-for": `203.0.113.${attempt}`,
+            "x-real-ip": `198.51.100.${attempt}`,
+            "cf-connecting-ip": `192.0.2.${attempt}`,
+          }),
+          "LocalAdmin@example.test",
+        ),
+        { status: "allowed" },
+      );
+    }
+
+    const blocked = await checkAdminLoginRateLimit(
+      request({
+        "x-forwarded-for": "192.0.2.200",
+        "x-real-ip": "192.0.2.201",
+      }),
+      " localadmin@EXAMPLE.test ",
+    );
+    assert.equal(blocked.status, "limited");
+    if (blocked.status === "limited") {
+      assert.ok(blocked.retryAfterSeconds > 0);
+      assert.ok(blocked.retryAfterSeconds <= 900);
+    }
+  } finally {
+    restore();
+  }
+});
+
+test("process-local login limiter preserves the per-window thresholds", () => {
+  let now = 1_000_000;
+  const limiter = new ProcessLocalLoginRateLimiter(
+    "test-only-local-rate-limit-secret",
+    100,
+    () => now,
+  );
+
+  for (let period = 0; period < 3; period += 1) {
+    if (period > 0) now += 15 * 60 * 1_000 + 1;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      assert.deepEqual(limiter.limit("same-admin@example.test"), {
+        status: "allowed",
+      });
+    }
+  }
+
+  const blocked = limiter.limit("same-admin@example.test");
+  assert.equal(blocked.status, "limited");
+  if (blocked.status === "limited") {
+    assert.ok(blocked.retryAfterSeconds > 0);
+    assert.ok(blocked.retryAfterSeconds <= 60 * 60);
+  }
+});
+
+test("process-local account capacity preserves active windows and frees expired entries", () => {
+  let now = 1_000_000;
+  const limiter = new ProcessLocalLoginRateLimiter(
+    "test-only-local-rate-limit-secret",
+    1,
+    () => now,
+  );
+
+  assert.deepEqual(limiter.limit("first-admin@example.test"), {
+    status: "allowed",
+  });
+
+  now += 15 * 60 * 1_000 + 1;
+  const whileAccountWindowIsActive = limiter.limit("second-admin@example.test");
+  assert.equal(whileAccountWindowIsActive.status, "limited");
+  if (whileAccountWindowIsActive.status === "limited") {
+    assert.ok(whileAccountWindowIsActive.retryAfterSeconds > 0);
+    assert.ok(whileAccountWindowIsActive.retryAfterSeconds <= 60 * 60);
+  }
+
+  now += 45 * 60 * 1_000 + 1;
+  assert.deepEqual(limiter.limit("second-admin@example.test"), {
+    status: "allowed",
+  });
+});
+
+test("shared local blocking does not allocate another account entry", () => {
+  let now = 1_000_000;
+  const limiter = new ProcessLocalLoginRateLimiter(
+    "test-only-local-rate-limit-secret",
+    11,
+    () => now,
+  );
+
+  for (let account = 0; account < 10; account += 1) {
+    assert.deepEqual(limiter.limit(`admin-${account}@example.test`), {
+      status: "allowed",
+    });
+  }
+  assert.equal(limiter.limit("blocked-admin@example.test").status, "limited");
+
+  now += 15 * 60 * 1_000 + 1;
+  assert.deepEqual(limiter.limit("next-admin@example.test"), {
+    status: "allowed",
   });
 });

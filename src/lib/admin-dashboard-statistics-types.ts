@@ -16,6 +16,16 @@ export const ADMIN_DASHBOARD_STATISTIC_KEYS = [
 export type AdminDashboardStatisticKey =
   (typeof ADMIN_DASHBOARD_STATISTIC_KEYS)[number];
 
+export function getAdminDashboardStatisticKeysForRole(
+  isAdmin: boolean,
+): readonly AdminDashboardStatisticKey[] {
+  return isAdmin
+    ? ADMIN_DASHBOARD_STATISTIC_KEYS
+    : ADMIN_DASHBOARD_STATISTIC_KEYS.filter(
+        (key) => key !== "messagesTotal" && key !== "messagesNew",
+      );
+}
+
 export type AdminDashboardStatistic =
   | { status: "available"; count: number }
   | { status: "unavailable" };

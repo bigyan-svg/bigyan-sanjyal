@@ -11,6 +11,7 @@ import {
 } from "../src/lib/admin-dashboard-statistics-core";
 import {
   ADMIN_DASHBOARD_STATISTIC_KEYS,
+  getAdminDashboardStatisticKeysForRole,
   getUnavailableAdminDashboardStatisticKeys,
   mergeAdminDashboardStatistics,
   parseAdminDashboardStatistic,
@@ -114,6 +115,7 @@ test("authorization runs before retry queries and errors are no-store", async ()
     new Request("https://example.test/api/admin/dashboard/statistics?metric=projectsTotal"),
     {
       authorize: async () => denied,
+      authorizeAdminOnly: async () => denied,
       queries: makeQueries({ projectsTotal: async () => { queryCount += 1; return 1; } }),
     },
   );
@@ -128,6 +130,7 @@ test("authorized statistics retry returns only the requested result with no-stor
     new Request("https://example.test/api/admin/dashboard/statistics?metric=messagesNew"),
     {
       authorize: async () => null,
+      authorizeAdminOnly: async () => null,
       queries: makeQueries({ messagesNew: async () => 3 }),
     },
   );
@@ -137,6 +140,56 @@ test("authorized statistics retry returns only the requested result with no-stor
   assert.deepEqual(await response.json(), {
     statistics: { messagesNew: { status: "available", count: 3 } },
   });
+});
+
+test("message statistics require ADMIN authorization, including mixed metric requests", async () => {
+  let messageQueryCount = 0;
+  const forbidden = Response.json(
+    { error: "You are not authorized." },
+    { status: 403, headers: { "Cache-Control": "no-store" } },
+  );
+  const authorizeAdminOnly = async () => forbidden;
+  const queries = makeQueries({
+    messagesNew: async () => { messageQueryCount += 1; return 3; },
+    messagesTotal: async () => { messageQueryCount += 1; return 5; },
+  });
+
+  for (const url of [
+    "https://example.test/api/admin/dashboard/statistics?metric=messagesNew",
+    "https://example.test/api/admin/dashboard/statistics?metric=projectsTotal&metric=messagesNew",
+  ]) {
+    const response = await handleAdminDashboardStatisticsRequest(
+      new Request(url),
+      {
+        authorize: async () => null,
+        authorizeAdminOnly,
+        queries,
+      },
+    );
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+
+  const editorContentResponse = await handleAdminDashboardStatisticsRequest(
+    new Request("https://example.test/api/admin/dashboard/statistics?metric=projectsTotal"),
+    {
+      authorize: async () => null,
+      authorizeAdminOnly,
+      queries,
+    },
+  );
+  assert.equal(editorContentResponse.status, 200);
+  assert.equal(messageQueryCount, 0);
+});
+
+test("Editor dashboard statistics omit message counts", () => {
+  const editorKeys = getAdminDashboardStatisticKeysForRole(false);
+  const adminKeys = getAdminDashboardStatisticKeysForRole(true);
+
+  assert.ok(!editorKeys.includes("messagesTotal"));
+  assert.ok(!editorKeys.includes("messagesNew"));
+  assert.ok(adminKeys.includes("messagesTotal"));
+  assert.ok(adminKeys.includes("messagesNew"));
 });
 
 test("retry targets only unavailable counts and merges without replacing successful values", () => {
@@ -216,4 +269,38 @@ test("dashboard getting-started links cover implemented sections without Soon pl
     assert.ok(page.includes(`href: "${href}"`), `missing dashboard link: ${href}`);
   }
   assert.doesNotMatch(page, /\bSoon\b/u);
+});
+
+test("dashboard Messages quick link and statistics are ADMIN-only", async () => {
+  const page = await readFile(new URL("../src/app/admin/page.tsx", import.meta.url), "utf8");
+
+  assert.match(
+    page,
+    /\{ label: "Messages", description: "Review contact form submissions\.", href: "\/admin\/messages", icon: Mail, adminOnly: true \}/u,
+  );
+  assert.match(
+    page,
+    /dashboardQuickLinks\s*\.filter\(\(item\) => !item\.adminOnly \|\| session\.user\.role === "ADMIN"\)\s*\.map/u,
+  );
+
+  for (const href of [
+    "/admin/profile",
+    "/admin/projects",
+    "/admin/skills",
+    "/admin/blog",
+    "/admin/education",
+    "/admin/experience",
+    "/admin/settings",
+  ]) {
+    assert.ok(page.includes(`href: "${href}"`), `missing Editor dashboard link: ${href}`);
+  }
+
+  assert.match(
+    page,
+    /<DashboardSummary isAdmin=\{session\.user\.role === "ADMIN"\} \/>/u,
+  );
+  assert.match(
+    page,
+    /getAdminDashboardStatisticKeysForRole\(isAdmin\)/u,
+  );
 });

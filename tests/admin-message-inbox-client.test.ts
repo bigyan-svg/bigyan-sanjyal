@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  AdminMessageConflictError,
   requestAdminMessageAction,
   requestAdminMessageList,
   runAdminMessageMutation,
@@ -157,5 +158,35 @@ test("failed list status mutation resets pending and loading for HTTP and networ
     assert.equal(loading, false);
     assert.equal(pending, false);
   }
+});
+
+test("message update conflicts expose the current record for refresh", async () => {
+  const currentMessage = {
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Sender",
+    email: "sender@example.test",
+    subject: "A question",
+    status: "SPAM",
+    createdAt: "2026-10-31T12:00:00.000Z",
+    message: "Current message content",
+    readAt: null,
+    updatedAt: "2026-11-01T12:00:00.000Z",
+  };
+
+  await assert.rejects(
+    requestAdminMessageAction(
+      currentMessage.id,
+      { status: "ARCHIVED" },
+      async () => Response.json({
+        error: "This message changed elsewhere.",
+        message: currentMessage,
+      }, { status: 409 }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof AdminMessageConflictError);
+      assert.deepEqual(error.currentMessage, currentMessage);
+      return true;
+    },
+  );
 });
 

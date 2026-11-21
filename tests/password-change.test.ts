@@ -11,6 +11,7 @@ import {
   updatePasswordAndRevokeSessions,
   type PasswordChangeExecuteRaw,
 } from "../src/lib/auth/password-change-transaction";
+import { isAdminSessionRevoked } from "../src/lib/auth/session-policy";
 import { getPasswordRecoveryValidationFailure } from "../src/lib/auth/password-recovery-validation";
 
 const TRUSTED_ORIGIN = "https://example.test";
@@ -143,6 +144,53 @@ test("reports committed password changes when clearing the current cookie fails"
   });
   assert.equal(calls.updatePasswordAndRevokeSessions.length, 1);
   assert.equal(calls.clearSessionCookie, 1);
+  await assertNoStore(response);
+});
+
+test("a retained cookie is rejected after password change when clearing it fails", async () => {
+  const sessions = new Map([
+    ["browser-one", { id: "browser-one-session", userId: "mock-user-id", revokedAt: null as Date | null }],
+    ["browser-two", { id: "browser-two-session", userId: "mock-user-id", revokedAt: null as Date | null }],
+  ]);
+  const { calls, dependencies } = createFixture({
+    getSessionToken: async () => "browser-one",
+    validateSession: async (token) => {
+      calls.validateSession += 1;
+      const session = sessions.get(token);
+      if (!session || isAdminSessionRevoked(session.revokedAt)) return null;
+      return { sessionId: session.id, user: { id: session.userId } };
+    },
+    updatePasswordAndRevokeSessions: async (userId) => {
+      calls.updatePasswordAndRevokeSessions.push([
+        userId,
+        "browser-one-session",
+        "stored-password-hash",
+        "new-password-hash",
+      ]);
+      for (const session of sessions.values()) {
+        if (session.userId === userId && !isAdminSessionRevoked(session.revokedAt)) {
+          session.revokedAt = new Date("2026-11-14T00:00:00.000Z");
+        }
+      }
+    },
+    clearSessionCookie: async () => {
+      calls.clearSessionCookie += 1;
+      throw new Error("private cookie-store details");
+    },
+  });
+
+  const response = await handlePasswordChange(makeRequest(validBody()), dependencies);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    success: true,
+    sessionCookieCleared: false,
+  });
+  assert.ok(isAdminSessionRevoked(sessions.get("browser-one")?.revokedAt ?? null));
+  assert.ok(isAdminSessionRevoked(sessions.get("browser-two")?.revokedAt ?? null));
+  assert.equal(await dependencies.validateSession("browser-one"), null);
+  assert.equal(await dependencies.validateSession("browser-two"), null);
+  assert.equal(calls.updatePasswordAndRevokeSessions.length, 1);
   await assertNoStore(response);
 });
 
@@ -354,6 +402,112 @@ test("a successful password update revokes active sessions in the same transacti
   assert.match(executedQueries[1].sql, /UPDATE "AdminSession"/u);
   assert.match(executedQueries[1].sql, /"revokedAt" IS NULL/u);
   assert.deepEqual(executedQueries[1].values, ["mock-user-id"]);
+});
+
+test("a password change revokes every active session for the administrator", async () => {
+  const revokedAt = new Date("2026-11-14T00:00:00.000Z");
+  const sessions = [
+    { id: "browser-one", userId: "mock-user-id", revokedAt: null as Date | null },
+    { id: "browser-two", userId: "mock-user-id", revokedAt: null as Date | null },
+    { id: "already-revoked", userId: "mock-user-id", revokedAt: new Date("2026-11-13T00:00:00.000Z") },
+    { id: "other-user", userId: "another-user-id", revokedAt: null as Date | null },
+  ];
+  const executeRaw: PasswordChangeExecuteRaw = async (query, ...values) => {
+    const sql = Array.from(query).join(" ? ");
+    if (sql.includes('UPDATE "AdminUser"')) return 1;
+
+    assert.match(sql, /UPDATE "AdminSession" AS admin_session/u);
+    assert.match(sql, /WHERE admin_session\."userId" =\s*\?/u);
+    assert.match(sql, /AND admin_session\."revokedAt" IS NULL/u);
+    const userId = values[0];
+    assert.equal(userId, "mock-user-id");
+    let updatedSessions = 0;
+    for (const session of sessions) {
+      if (session.userId === userId && !isAdminSessionRevoked(session.revokedAt)) {
+        session.revokedAt = revokedAt;
+        updatedSessions += 1;
+      }
+    }
+    return updatedSessions;
+  };
+
+  await updatePasswordAndRevokeSessions(executeRaw, {
+    userId: "mock-user-id",
+    sessionId: "browser-one",
+    currentPasswordHash: "old-hash",
+    newPasswordHash: "new-hash",
+  });
+
+  assert.equal(sessions.find(({ id }) => id === "browser-one")?.revokedAt, revokedAt);
+  assert.equal(sessions.find(({ id }) => id === "browser-two")?.revokedAt, revokedAt);
+  assert.equal(
+    sessions.find(({ id }) => id === "already-revoked")?.revokedAt?.toISOString(),
+    "2026-11-13T00:00:00.000Z",
+  );
+  assert.equal(sessions.find(({ id }) => id === "other-user")?.revokedAt, null);
+});
+
+test("revocation failure rolls back the password change and returns no success", async () => {
+  const state = {
+    passwordHash: "old-hash",
+    passwordChangedAt: new Date("2026-11-01T00:00:00.000Z"),
+    sessions: [
+      { id: "browser-one", userId: "mock-user-id", revokedAt: null as Date | null },
+      { id: "browser-two", userId: "mock-user-id", revokedAt: null as Date | null },
+    ],
+  };
+  const originalPasswordChangedAt = state.passwordChangedAt;
+  const { calls, dependencies } = createFixture({
+    updatePasswordAndRevokeSessions: async (userId, sessionId, currentHash, newHash) => {
+      const beforeTransaction = {
+        passwordHash: state.passwordHash,
+        passwordChangedAt: state.passwordChangedAt,
+        sessions: state.sessions.map((session) => ({ ...session })),
+      };
+      let queryCount = 0;
+      const executeRaw: PasswordChangeExecuteRaw = async (query) => {
+        queryCount += 1;
+        const sql = Array.from(query).join(" ? ");
+        if (queryCount === 1) {
+          assert.match(sql, /UPDATE "AdminUser"/u);
+          state.passwordHash = newHash;
+          state.passwordChangedAt = new Date("2026-11-14T00:00:00.000Z");
+          return 1;
+        }
+
+        assert.match(sql, /UPDATE "AdminSession"/u);
+        assert.equal(userId, "mock-user-id");
+        assert.equal(sessionId, "mock-session-id");
+        assert.equal(currentHash, "stored-password-hash");
+        state.sessions[0].revokedAt = new Date("2026-11-14T00:00:00.000Z");
+        throw new Error("simulated session-revocation failure");
+      };
+
+      try {
+        await updatePasswordAndRevokeSessions(executeRaw, {
+          userId,
+          sessionId,
+          currentPasswordHash: currentHash,
+          newPasswordHash: newHash,
+        });
+      } catch (error) {
+        state.passwordHash = beforeTransaction.passwordHash;
+        state.passwordChangedAt = beforeTransaction.passwordChangedAt;
+        state.sessions = beforeTransaction.sessions;
+        throw error;
+      }
+    },
+  });
+
+  const response = await handlePasswordChange(makeRequest(validBody()), dependencies);
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: "Unable to change password." });
+  assert.equal(state.passwordHash, "old-hash");
+  assert.equal(state.passwordChangedAt, originalPasswordChangedAt);
+  assert.deepEqual(state.sessions.map(({ revokedAt }) => revokedAt), [null, null]);
+  assert.equal(calls.clearSessionCookie, 0);
+  await assertNoStore(response);
 });
 
 test("does not revoke sessions if the guarded password update found no current session", async () => {

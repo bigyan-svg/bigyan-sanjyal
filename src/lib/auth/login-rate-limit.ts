@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
@@ -10,6 +10,7 @@ import {
 } from "./rate-limit-readiness";
 
 const RATE_LIMIT_TIMEOUT_MS = 1_000;
+const LOCAL_LOGIN_RATE_LIMIT_HMAC_SECRET = randomBytes(32).toString("hex");
 
 export const ADMIN_RATE_LIMIT_POLICIES = {
   adminLoginIpFifteenMinutes: {
@@ -54,6 +55,40 @@ export const ADMIN_RATE_LIMIT_POLICIES = {
   },
 } as const;
 
+const LOCAL_LOGIN_RATE_LIMIT_WINDOWS = [
+  {
+    name: "ipFifteenMinutes",
+    limit: ADMIN_RATE_LIMIT_POLICIES.adminLoginIpFifteenMinutes.limit,
+    windowMs: 15 * 60 * 1_000,
+    identifier: "ip",
+  },
+  {
+    name: "ipOneHour",
+    limit: ADMIN_RATE_LIMIT_POLICIES.adminLoginIpOneHour.limit,
+    windowMs: 60 * 60 * 1_000,
+    identifier: "ip",
+  },
+  {
+    name: "emailIpFifteenMinutes",
+    limit: ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailIpFifteenMinutes.limit,
+    windowMs: 15 * 60 * 1_000,
+    identifier: "email-ip",
+  },
+  {
+    name: "emailFifteenMinutes",
+    limit: ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailFifteenMinutes.limit,
+    windowMs: 15 * 60 * 1_000,
+    identifier: "email",
+  },
+  {
+    name: "emailOneHour",
+    limit: ADMIN_RATE_LIMIT_POLICIES.adminLoginEmailOneHour.limit,
+    windowMs: 60 * 60 * 1_000,
+    identifier: "email",
+  },
+] as const;
+const MAX_LOCAL_LOGIN_RATE_LIMIT_ACCOUNTS = 1_000;
+
 type RequestLimiters = {
   ipFifteenMinutes: Ratelimit;
   ipOneHour: Ratelimit;
@@ -94,6 +129,11 @@ type LoginRateLimiter = {
   limit(identifier: string): Promise<RateLimitDecision>;
 };
 
+type LocalRateLimitWindow = {
+  timestamps: number[];
+  windowMs: number;
+};
+
 export type AdminLoginRateLimitBackend = {
   hmacSecret: string;
   ipFifteenMinutes: LoginRateLimiter;
@@ -112,6 +152,16 @@ export type ContactRateLimitResult =
     };
 
 let cachedLimiters: RequestLimiters | undefined;
+
+function isLocalDevelopmentLoginRateLimitEnabled(
+  environment: RateLimitEnvironment,
+): boolean {
+  return (
+    environment.NODE_ENV === "development" &&
+    environment.VERCEL !== "1" &&
+    !environment.VERCEL_ENV
+  );
+}
 
 export function getTrustedClientIp(
   request: Request,
@@ -274,11 +324,161 @@ export function createAdminLoginEmailPseudonym(
   return createRateLimitPseudonym(secret, "email", email.trim().toLowerCase());
 }
 
+export class ProcessLocalLoginRateLimiter {
+  private readonly sharedWindows = new Map<string, LocalRateLimitWindow>();
+  private readonly accountWindows = new Map<
+    string,
+    Map<string, LocalRateLimitWindow>
+  >();
+
+  constructor(
+    private readonly hmacSecret: string,
+    private readonly maxAccounts = MAX_LOCAL_LOGIN_RATE_LIMIT_ACCOUNTS,
+    private readonly now: () => number = Date.now,
+  ) {
+    if (!Number.isSafeInteger(maxAccounts) || maxAccounts < 1) {
+      throw new RangeError("The local login rate-limit account capacity must be positive.");
+    }
+  }
+
+  limit(email: string): AdminLoginRateLimitResult {
+    const now = this.now();
+    this.pruneExpiredWindows(now);
+
+    const sharedResults = LOCAL_LOGIN_RATE_LIMIT_WINDOWS
+      .filter((window) => window.identifier === "ip")
+      .map((window) =>
+        this.checkWindow(
+          this.sharedWindows,
+          window.name,
+          window.limit,
+          window.windowMs,
+          now,
+        ),
+      );
+    const blockedSharedResults = sharedResults.filter((result) => !result.success);
+    if (blockedSharedResults.length > 0) {
+      return this.limitedResult(blockedSharedResults, now);
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const accountKey = createAdminLoginEmailPseudonym(
+      this.hmacSecret,
+      normalizedEmail,
+    );
+    let accountWindows = this.accountWindows.get(accountKey);
+
+    if (!accountWindows && this.accountWindows.size >= this.maxAccounts) {
+      return {
+        status: "limited",
+        retryAfterSeconds: this.nextAccountSlotRetryAfter(now),
+      };
+    }
+
+    if (!accountWindows) {
+      accountWindows = new Map();
+      this.accountWindows.set(accountKey, accountWindows);
+    }
+
+    const accountResults = LOCAL_LOGIN_RATE_LIMIT_WINDOWS
+      .filter((window) => window.identifier !== "ip")
+      .map((window) =>
+        this.checkWindow(
+          accountWindows,
+          window.name,
+          window.limit,
+          window.windowMs,
+          now,
+        ),
+      );
+    const blockedAccountResults = accountResults.filter((result) => !result.success);
+
+    return blockedAccountResults.length > 0
+      ? this.limitedResult(blockedAccountResults, now)
+      : { status: "allowed" };
+  }
+
+  private checkWindow(
+    windows: Map<string, LocalRateLimitWindow>,
+    name: string,
+    limit: number,
+    windowMs: number,
+    now: number,
+  ): RateLimitDecision {
+    const storedWindow = windows.get(name) ?? { timestamps: [], windowMs };
+    const reset = (storedWindow.timestamps[0] ?? now) + windowMs;
+
+    if (storedWindow.timestamps.length >= limit) {
+      return { success: false, reset };
+    }
+
+    storedWindow.timestamps.push(now);
+    windows.set(name, storedWindow);
+    return { success: true, reset: now + windowMs };
+  }
+
+  private pruneExpiredWindows(now: number): void {
+    for (const [name, window] of this.sharedWindows) {
+      window.timestamps = window.timestamps.filter(
+        (timestamp) => timestamp > now - window.windowMs,
+      );
+      if (window.timestamps.length === 0) this.sharedWindows.delete(name);
+    }
+
+    for (const [accountKey, windows] of this.accountWindows) {
+      for (const [name, window] of windows) {
+        window.timestamps = window.timestamps.filter(
+          (timestamp) => timestamp > now - window.windowMs,
+        );
+        if (window.timestamps.length === 0) windows.delete(name);
+      }
+      if (windows.size === 0) this.accountWindows.delete(accountKey);
+    }
+  }
+
+  private nextAccountSlotRetryAfter(now: number): number {
+    let nextAvailableAt = Number.POSITIVE_INFINITY;
+
+    for (const windows of this.accountWindows.values()) {
+      let accountAvailableAt = Number.NEGATIVE_INFINITY;
+      for (const window of windows.values()) {
+        const latestTimestamp = Math.max(...window.timestamps);
+        accountAvailableAt = Math.max(
+          accountAvailableAt,
+          latestTimestamp + window.windowMs,
+        );
+      }
+      nextAvailableAt = Math.min(nextAvailableAt, accountAvailableAt);
+    }
+
+    return Math.max(1, Math.ceil((nextAvailableAt - now) / 1_000));
+  }
+
+  private limitedResult(
+    blockedResults: readonly RateLimitDecision[],
+    now: number,
+  ): AdminLoginRateLimitResult {
+    const nextAllowedAt = Math.max(...blockedResults.map((result) => result.reset));
+    return {
+      status: "limited",
+      retryAfterSeconds: Math.max(1, Math.ceil((nextAllowedAt - now) / 1_000)),
+    };
+  }
+}
+
+const localDevelopmentLoginRateLimiter = new ProcessLocalLoginRateLimiter(
+  LOCAL_LOGIN_RATE_LIMIT_HMAC_SECRET,
+);
+
 export async function checkAdminLoginRateLimit(
   request: Request,
   normalizedEmail: string,
   backend?: AdminLoginRateLimitBackend,
 ): Promise<AdminLoginRateLimitResult> {
+  if (isLocalDevelopmentLoginRateLimitEnabled(process.env)) {
+    return localDevelopmentLoginRateLimiter.limit(normalizedEmail);
+  }
+
   const clientIp = getTrustedClientIp(request);
 
   if (!clientIp) {

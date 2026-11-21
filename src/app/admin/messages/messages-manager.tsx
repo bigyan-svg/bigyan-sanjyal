@@ -11,6 +11,7 @@ import type {
   AdminMessageStatusFilter,
 } from "@/lib/admin-messages";
 import {
+  AdminMessageConflictError,
   requestAdminMessageAction,
   requestAdminMessageList,
   runSingleAdminMessageMutation,
@@ -64,7 +65,8 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
   const refreshMessages = useCallback(async (
     isActive: () => boolean = () => true,
     initialLoad = false,
-  ) => {
+  ): Promise<boolean> => {
+    let refreshed = false;
     if (!initialLoad) {
       setLoading(true);
       setError(null);
@@ -75,12 +77,14 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
       if (isActive()) {
         setList(value);
         setError(null);
+        refreshed = true;
       }
     }).catch(() => {
       if (isActive()) setError("Messages are temporarily unavailable. Please try again.");
     }).finally(() => {
       if (isActive()) setLoading(false);
     });
+    return refreshed;
   }, [initialPage, initialStatus]);
 
   useEffect(() => {
@@ -104,8 +108,18 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
       const result = await requestAdminMessageAction(id, { action: "open" });
       setSelectedMessage(result.message as MessageDetail);
       await refreshMessages();
-    } catch {
-      setActionError("This message could not be opened. Please try again.");
+    } catch (error) {
+      if (error instanceof AdminMessageConflictError) {
+        if (error.currentMessage) setSelectedMessage(error.currentMessage);
+        setActionError(
+          error.currentMessage
+            ? "This message changed elsewhere. The latest version is shown."
+            : "This message changed elsewhere. It may have been removed.",
+        );
+        await refreshMessages();
+      } else {
+        setActionError("This message could not be opened. Please try again.");
+      }
     } finally {
       setOpening(false);
     }
@@ -130,8 +144,18 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
       setSelectedMessage(mutation.value.message as MessageDetail);
       setSuccess(`Message marked ${STATUS_LABELS[status].toLowerCase()}.`);
       await refreshMessages();
-    } catch {
-      setActionError("The message could not be updated. Please try again.");
+    } catch (error) {
+      if (error instanceof AdminMessageConflictError) {
+        if (error.currentMessage) setSelectedMessage(error.currentMessage);
+        setActionError(
+          error.currentMessage
+            ? "This message changed elsewhere. The latest version is shown; review its status before trying again."
+            : "This message changed elsewhere. Close and reopen it to view the latest details.",
+        );
+        await refreshMessages();
+      } else {
+        setActionError("The message could not be updated. Please try again.");
+      }
     }
   }, [refreshMessages, selectedMessage]);
 
@@ -157,8 +181,17 @@ export function MessagesManager({ initialStatus, initialPage }: MessagesManagerP
       if (mutation.kind === "busy") return;
       setSuccess(`Message marked ${STATUS_LABELS[status].toLowerCase()}.`);
       await refreshMessages();
-    } catch {
-      setListActionError("The message could not be updated. Please try again.");
+    } catch (error) {
+      if (error instanceof AdminMessageConflictError) {
+        const refreshed = await refreshMessages();
+        setListActionError(
+          refreshed
+            ? "This message changed elsewhere. The inbox was refreshed; review its current status."
+            : "This message changed elsewhere, but the inbox could not be refreshed. Please retry loading messages.",
+        );
+      } else {
+        setListActionError("The message could not be updated. Please try again.");
+      }
     }
   }
 

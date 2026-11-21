@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { SECURITY_HEADERS } from "./src/lib/security-headers";
+import { getSecurityHeaders } from "./src/lib/security-headers";
 
 const nextConfig: NextConfig = {
   /* config options here */
@@ -13,11 +13,20 @@ const nextConfig: NextConfig = {
       },
     },
   },
+  async redirects() {
+    return [
+      {
+        source: "/work-experience",
+        destination: "/experience",
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {
         source: "/:path*",
-        headers: SECURITY_HEADERS.map(({ key, value }) => ({ key, value })),
+        headers: getSecurityHeaders().map(({ key, value }) => ({ key, value })),
       },
     ];
   },

@@ -32,9 +32,10 @@ async function AdminMessagesContent({ searchParams }: AdminMessagesPageProps) {
   const token = (await cookies()).get(ADMIN_SESSION_COOKIE_NAME)?.value;
   const session = token ? await validateAdminSession(token) : null;
 
-  if (!session || (session.user.role !== "ADMIN" && session.user.role !== "EDITOR")) {
+  if (!session) {
     redirect("/admin/login");
   }
+  if (session.user.role !== "ADMIN") redirect("/admin");
 
   const params = await searchParams;
   const requestedStatus = typeof params.status === "string" ? params.status : "ALL";

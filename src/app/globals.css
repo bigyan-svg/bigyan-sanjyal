@@ -54,10 +54,17 @@
 }
 
 html {
-  min-width: 20rem;
   scroll-behavior: smooth;
   scroll-padding-top: 7rem;
   background: var(--color-canvas);
+}
+
+html[data-document-scroll-locked="true"] {
+  overflow: hidden !important;
+}
+
+html[data-document-scroll-locked="true"] body {
+  overflow: hidden !important;
 }
 
 body {

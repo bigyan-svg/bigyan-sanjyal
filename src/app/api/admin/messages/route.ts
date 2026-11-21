@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
-import { authorizeAdminContentRead } from "@/lib/auth/admin-content";
+import { authorizeAdminOnlyContentRead } from "@/lib/auth/admin-content";
 import {
   handleAdminMessagesList,
   type AdminMessageListItem,
@@ -19,7 +19,7 @@ const adminMessageListSelect = {
 
 export async function GET(request: Request): Promise<Response> {
   return handleAdminMessagesList(request, {
-    authorize: (incomingRequest) => authorizeAdminContentRead(incomingRequest),
+    authorize: (incomingRequest) => authorizeAdminOnlyContentRead(incomingRequest),
     findMessages: async ({ status, skip, take }) =>
       prisma.contactMessage.findMany({
         where: status ? { status } : undefined,

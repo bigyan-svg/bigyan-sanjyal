@@ -10,6 +10,12 @@ import {
   type SyntheticEvent,
 } from "react";
 import { useDismissableLayer } from "@/hooks/use-dismissable-layer";
+import { useDocumentScrollLock } from "@/hooks/use-document-scroll-lock";
+import {
+  closeProjectGalleryImage,
+  openProjectGalleryImage,
+  ProjectGalleryFocusController,
+} from "@/lib/project-gallery-focus";
 
 interface ProjectGalleryImage {
   id: string;
@@ -25,6 +31,8 @@ interface ProjectImageGalleryProps {
 
 export function ProjectImageGallery({ projectTitle, images }: ProjectImageGalleryProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const focusControllerRef = useRef(new ProjectGalleryFocusController());
+  const mountedRef = useRef(true);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const previousButtonRef = useRef<HTMLButtonElement>(null);
@@ -50,6 +58,7 @@ export function ProjectImageGallery({ projectTitle, images }: ProjectImageGaller
       counterTextRef,
     ],
     onOutsideClick: closeLightbox,
+    onEscape: closeLightbox,
   });
 
   useEffect(() => {
@@ -58,23 +67,36 @@ export function ProjectImageGallery({ projectTitle, images }: ProjectImageGaller
     const dialog = dialogRef.current;
     if (!dialog) return;
 
-    const previousBodyOverflow = document.body.style.overflow;
-    const previousDocumentOverflow = document.documentElement.style.overflow;
-
     if (!dialog.open) dialog.showModal();
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-    closeButtonRef.current?.focus();
 
     return () => {
       if (dialog.open) dialog.close();
-      document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousDocumentOverflow;
     };
   }, [isOpen]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    const focusController = focusControllerRef.current;
+    return () => {
+      mountedRef.current = false;
+      focusController.clear();
+    };
+  }, []);
+
+  useDocumentScrollLock(isOpen);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    closeButtonRef.current?.focus({ preventScroll: true });
+  }, [isOpen]);
+
   function closeLightbox() {
-    setActiveIndex(null);
+    if (activeIndex === null) return;
+    closeProjectGalleryImage(
+      focusControllerRef.current,
+      () => setActiveIndex(null),
+      { isMounted: () => mountedRef.current },
+    );
   }
 
   function handleCancel(event: SyntheticEvent<HTMLDialogElement>) {
@@ -102,7 +124,13 @@ export function ProjectImageGallery({ projectTitle, images }: ProjectImageGaller
             <button
               aria-label={`View image ${index + 1} of ${images.length} for ${projectTitle}: ${image.altText}`}
               className="public-projects__image-open"
-              onClick={() => setActiveIndex(index)}
+              onClick={(event) => {
+                openProjectGalleryImage(
+                  focusControllerRef.current,
+                  event.currentTarget,
+                  () => setActiveIndex(index),
+                );
+              }}
               type="button"
             >
               {/* Validated HTTPS images bypass Next's optimizer to avoid proxying arbitrary hosts. */}
@@ -127,6 +155,7 @@ export function ProjectImageGallery({ projectTitle, images }: ProjectImageGaller
         aria-modal="true"
         className="project-lightbox"
         onCancel={handleCancel}
+        onClose={closeLightbox}
         onKeyDown={handleKeyDown}
         ref={dialogRef}
       >

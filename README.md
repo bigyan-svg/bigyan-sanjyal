@@ -25,22 +25,29 @@ emulate Vercel on another host.
 | `UPSTASH_REDIS_REST_TOKEN` | Rate-limited operations | Must be non-empty after trimming. Treat as a secret and scope it to the environment's Upstash resource. |
 | `ADMIN_RATE_LIMIT_HMAC_SECRET` | Rate-limited operations | At least 32 UTF-8 bytes. The application checks length, not entropy; generate at least 32 cryptographically random bytes in a secret manager and use independent values per environment. |
 | `VERCEL` | Supplied by Vercel | The code accepts Vercel IP trust only when exactly `1`; never set this manually outside Vercel. |
-| `ENABLE_LOCAL_LOGIN_RATE_LIMIT` | Optional local development only | Set to `true` to opt in to local rate limiting. This uses the shared `local-development` identifier, not a per-client address, and does not enable production rate limiting. |
+| `ENABLE_LOCAL_LOGIN_RATE_LIMIT` | Optional local development only | Set to `true` only when exercising Redis-backed password-change or contact rate limits locally. It uses a shared `local-development` identifier, not a per-client address, and does not enable production rate limiting. Local admin login rate limiting is enabled automatically in memory and does not require this setting. |
 | `NODE_ENV` | Operator CLI requires explicit `production`; otherwise supplied by runtime/tooling | The admin operator CLI refuses to run unless this is exactly `production`. Do not use this as a substitute for verifying the database target. |
 
 Prisma generation and Next.js build do not require a live database connection.
 Runtime database operations require a valid `DATABASE_URL`. Production and
-Preview rate-limited operations require all three Upstash/HMAC variables and a
-trusted client IP. Missing or invalid rate-limit configuration, an untrusted
-client IP, or an unavailable Upstash service fails closed for login, password
-change, and contact submission. The readiness check validates configuration;
-it cannot prove that a request will carry the trusted IP header.
+Preview and Production rate-limited operations require all three Upstash/HMAC
+variables and a trusted client IP. Missing or invalid rate-limit configuration,
+an untrusted client IP, or an unavailable Upstash service fails closed for
+login, password change, and contact submission in those environments. Local
+admin login uses a process-local sliding window with the same login thresholds
+and does not use request IP headers or require Redis credentials. Its counters
+are shared by all requests handled by that development process and reset when
+it restarts; it is not suitable for Preview, Production, or multiple
+application instances. Other Redis-backed local operations still require the
+local Redis opt-in and configuration. The readiness check validates
+configuration; it cannot prove that a request will carry the trusted IP
+header.
 
 ### Environment matrix
 
 | Environment | Database values | Trusted origin | Redis and authentication secret |
 | --- | --- | --- | --- |
-| Local development | `DATABASE_URL` for a disposable local/dev database when using database-backed features. `DIRECT_URL` and `SHADOW_DATABASE_URL` only when running the development migration workflow; target isolated development databases. | `AUTH_TRUSTED_ORIGIN` is not required for local non-Vercel development; the code allows `http://localhost:3000`. | Upstash variables are optional unless exercising rate limiting. If `ENABLE_LOCAL_LOGIN_RATE_LIMIT=true`, configure all three rate-limit variables and a development-only Upstash resource; never reuse production credentials. |
+| Local development | `DATABASE_URL` for a disposable local/dev database when using database-backed features. `DIRECT_URL` and `SHADOW_DATABASE_URL` only when running the development migration workflow; target isolated development databases. | `AUTH_TRUSTED_ORIGIN` is not required for local non-Vercel development; the code allows `http://localhost:3000`. | Admin login uses process-local rate limiting automatically and needs no Redis configuration. Upstash variables are optional unless exercising Redis-backed operations. For local Redis-backed password-change/contact rate limits, set `ENABLE_LOCAL_LOGIN_RATE_LIMIT=true` and configure a development-only Upstash resource; never reuse production credentials. |
 | Vercel Preview | `DATABASE_URL` must use a dedicated, non-production Preview database and the provider-appropriate pooled runtime endpoint. | Set `AUTH_TRUSTED_ORIGIN` to the exact HTTPS Preview origin that will send write/auth requests. | Set all three rate-limit variables. Use a Preview-only Upstash resource/credentials and a separately generated HMAC secret. |
 | Vercel Production | `DATABASE_URL` must use the Production database's pooled/runtime endpoint. | Set `AUTH_TRUSTED_ORIGIN` to the exact canonical HTTPS origin used for authentication and writes. | Set all three rate-limit variables. Use the Production Upstash resource/credentials and an independently generated Production HMAC secret. |
 | Migration/operator execution | Migration job: `DIRECT_URL` to the intended direct database endpoint; development `npm run db:migrate` also needs an isolated `SHADOW_DATABASE_URL`. Admin operator: `DATABASE_URL` to the explicitly approved target. | Not used by Prisma migration commands or the admin operator CLI. | Not used by the migration or admin operator commands. Keep operator access independently authorized and scoped. |
@@ -83,8 +90,9 @@ downloads font files during build unless `NEXT_FONT_GOOGLE_MOCKED_RESPONSES` is
 set. That mock was not set for the candidate production build. Therefore the
 successful local build demonstrates that this environment could complete the
 font fetches; it is not an offline build and does not prove that Vercel's build
-environment will have equivalent network access. The build used the default
-Next.js 16.4.3 Turbopack mode and completed successfully in this run.
+environment will have equivalent network access. The verified local build used
+Next.js 16.4.6 with Turbopack and completed successfully; this does not establish
+that Vercel Preview or Production builds will succeed.
 
 `argon2` is pinned to 0.45.1, with Node-API version 8 native bindings. Its
 installed package includes Linux x64 and arm64 binaries for both glibc and
@@ -319,10 +327,17 @@ deployment with staging-only database and Upstash resources:
    forwarding headers or by weakening fail-closed behavior.
 6. Do not log, return, or otherwise expose raw forwarded-IP headers.
 
-Verify TLS and security headers at the deployed hostname. The repository does
-not configure a Content-Security-Policy; review any platform-supplied headers
-and test any proposed CSP against Next.js scripts, styles, images, login, and
-admin functionality before enabling it.
+Verify TLS and security headers at the deployed hostname. The application adds
+a configurable, non-enforcing `Content-Security-Policy-Report-Only` header;
+`CSP_REPORT_ONLY_ENABLED` in `src/lib/security-headers.ts` controls whether it
+is included. No violation-report endpoint is configured, so inspect violations
+in browser developer tools. The `img-src https:` source is provisional because
+the site currently accepts external HTTPS image URLs. Investigate violations
+from framework-generated inline scripts/styles, streamed React Server
+Component payloads, and Preview platform tooling before considering
+enforcement. Public navigation, project lightbox, and admin drawer scroll locks
+use a document attribute and static CSS rather than runtime inline styles. This
+monitoring policy is not ready for enforcement.
 
 ### Pre-deployment verification checklist
 

@@ -64,6 +64,23 @@ export interface ContactMessageTransition extends ContactMessageState {
   changed: boolean;
 }
 
+export class AdminMessageUpdateConflictError extends Error {
+  constructor(readonly currentMessage: AdminMessageDetail) {
+    super("The message changed while it was being updated.");
+    this.name = "AdminMessageUpdateConflictError";
+  }
+}
+
+export interface AdminMessageActionStore {
+  findState(id: string): Promise<ContactMessageState | null>;
+  updateState(
+    id: string,
+    current: ContactMessageState,
+    transition: ContactMessageTransition,
+  ): Promise<boolean>;
+  findDetail(id: string): Promise<AdminMessageDetail | null>;
+}
+
 function jsonResponse(body: unknown, status: number): Response {
   return Response.json(body, {
     status,
@@ -204,6 +221,29 @@ export function resolveContactMessageTransition(
   };
 }
 
+export async function performAdminMessageAction(
+  store: AdminMessageActionStore,
+  id: string,
+  action: AdminMessageAction,
+  now: Date,
+): Promise<AdminMessageDetail | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const current = await store.findState(id);
+    if (!current) return null;
+
+    const transition = resolveContactMessageTransition(current, action, now);
+    if (!transition.changed) return store.findDetail(id);
+
+    if (await store.updateState(id, current, transition)) {
+      return store.findDetail(id);
+    }
+  }
+
+  const currentMessage = await store.findDetail(id);
+  if (!currentMessage) return null;
+  throw new AdminMessageUpdateConflictError(currentMessage);
+}
+
 export async function handleAdminMessagePatch(
   request: Request,
   id: string,
@@ -245,7 +285,13 @@ export async function handleAdminMessagePatch(
     );
     if (!message) return jsonResponse({ error: "Message not found." }, 404);
     return jsonResponse({ message }, 200);
-  } catch {
+  } catch (error) {
+    if (error instanceof AdminMessageUpdateConflictError) {
+      return jsonResponse({
+        error: "This message changed elsewhere. Review its current state and try again.",
+        message: error.currentMessage,
+      }, 409);
+    }
     return jsonResponse({ error: "Unable to update the message." }, 500);
   }
 }

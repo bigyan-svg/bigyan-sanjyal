@@ -76,6 +76,26 @@ test("sessions created before a password change are rejected at microsecond prec
   assert.equal(comparison.isEqual, false);
 });
 
+test("previously issued sessions fail both revocation and password-change checks", () => {
+  const sessions = [
+    { id: "browser-one", createdAt: "1796124399999999", revokedAt: new Date(now) },
+    { id: "browser-two", createdAt: "1796124399999998", revokedAt: new Date(now) },
+  ];
+
+  for (const session of sessions) {
+    assert.equal(isAdminSessionRevoked(session.revokedAt), true);
+
+    const comparison = compareSessionPasswordChangeTimestamps(
+      session.createdAt,
+      "1796124400000000",
+      "2026-12-01T11:26:39.999999Z",
+      "2026-12-01T11:26:40.000000Z",
+    );
+    assert.ok(comparison);
+    assert.equal(comparison.isNewer, false);
+  }
+});
+
 test("sessions created after a password change are accepted at microsecond precision", () => {
   const comparison = compareSessionPasswordChangeTimestamps(
     "1796124400000001",

@@ -1,11 +1,10 @@
 import "server-only";
 
 import type { Prisma } from "@/generated/prisma/client";
-import { authorizeAdminContentWrite } from "@/lib/auth/admin-content";
+import { authorizeAdminOnlyContentWrite } from "@/lib/auth/admin-content";
 import {
   handleAdminMessagePatch,
-  resolveContactMessageTransition,
-  type AdminMessageDetail,
+  performAdminMessageAction,
 } from "@/lib/admin-messages";
 import { prisma } from "@/lib/prisma";
 
@@ -28,33 +27,33 @@ export async function PATCH(
   const { id } = await context.params;
 
   return handleAdminMessagePatch(request, id, {
-    authorize: authorizeAdminContentWrite,
+    authorize: authorizeAdminOnlyContentWrite,
     performAction: (messageId, action, now) =>
       prisma.$transaction(async (transaction) => {
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          const current = await transaction.contactMessage.findUnique({
-            where: { id: messageId },
+        return performAdminMessageAction({
+          findState: (id) => transaction.contactMessage.findUnique({
+            where: { id },
             select: { status: true, readAt: true },
-          });
-          if (!current) return null;
-
-          const transition = resolveContactMessageTransition(current, action, now);
-          if (!transition.changed) break;
-
-          const updated = await transaction.contactMessage.updateMany({
-            where: { id: messageId, status: current.status },
-            data: {
-              status: transition.status,
-              readAt: transition.readAt,
-            },
-          });
-          if (updated.count === 1) break;
-        }
-
-        return transaction.contactMessage.findUnique({
-          where: { id: messageId },
-          select: adminMessageDetailSelect,
-        }) as Promise<AdminMessageDetail | null>;
+          }),
+          updateState: async (id, current, transition) => {
+            const result = await transaction.contactMessage.updateMany({
+              where: {
+                id,
+                status: current.status,
+                readAt: current.readAt,
+              },
+              data: {
+                status: transition.status,
+                readAt: transition.readAt,
+              },
+            });
+            return result.count === 1;
+          },
+          findDetail: (id) => transaction.contactMessage.findUnique({
+            where: { id },
+            select: adminMessageDetailSelect,
+          }),
+        }, messageId, action, now);
       }),
   });
 }

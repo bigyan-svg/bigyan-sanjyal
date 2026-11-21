@@ -39,8 +39,10 @@ const statisticCards: {
 
 export function DashboardStatistics({
   initialStatistics,
+  isAdmin,
 }: {
   initialStatistics: AdminDashboardStatistics;
+  isAdmin: boolean;
 }) {
   const [statistics, setStatistics] = useState(initialStatistics);
   const [pendingKeys, setPendingKeys] = useState<Set<AdminDashboardStatisticKey>>(
@@ -83,78 +85,80 @@ export function DashboardStatistics({
   return (
     <>
       <div className="admin-dashboard__stat-grid">
-        {statisticCards.map((card) => {
-          const Icon = card.icon;
-          const total = statistics[card.total] ?? { status: "unavailable" as const };
-          const secondary = statistics[card.secondary] ?? { status: "unavailable" as const };
+        {statisticCards
+          .filter((card) => isAdmin || card.total !== "messagesTotal")
+          .map((card) => {
+            const Icon = card.icon;
+            const total = statistics[card.total] ?? { status: "unavailable" as const };
+            const secondary = statistics[card.secondary] ?? { status: "unavailable" as const };
 
-          return (
-            <Card className="admin-dashboard__stat-card" key={card.title} variant="outlined">
-              <div className="admin-dashboard__stat-heading">
-                <h3>{card.title}</h3>
-                <span aria-hidden="true" className="admin-dashboard__stat-icon">
-                  <Icon size={17} />
-                </span>
-              </div>
-              <div className="admin-dashboard__stat-values">
-                <div>
-                  <dl className="admin-dashboard__stat-total">
-                    <dt>Total records</dt>
-                    <dd>
-                      {total.status === "available"
-                        ? total.count.toLocaleString()
-                        : "Unavailable"}
-                    </dd>
-                  </dl>
-                  <div className="admin-dashboard__stat-support">
-                    {total.status === "unavailable" ? (
-                      <RetryButton
-                        isPending={pendingKeys.has(card.total)}
-                        label={`${getStatisticLabel(card.total)} count`}
-                        onRetry={() => void retryStatistic(card.total)}
-                      />
-                    ) : (
-                      <p>
-                        {total.count === 0
-                          ? `No ${card.plural} yet.`
-                          : `${total.count.toLocaleString()} ${total.count === 1 ? card.singular : card.plural} stored.`}
-                      </p>
-                    )}
+            return (
+              <Card className="admin-dashboard__stat-card" key={card.title} variant="outlined">
+                <div className="admin-dashboard__stat-heading">
+                  <h3>{card.title}</h3>
+                  <span aria-hidden="true" className="admin-dashboard__stat-icon">
+                    <Icon size={17} />
+                  </span>
+                </div>
+                <div className="admin-dashboard__stat-values">
+                  <div>
+                    <dl className="admin-dashboard__stat-total">
+                      <dt>Total records</dt>
+                      <dd>
+                        {total.status === "available"
+                          ? total.count.toLocaleString()
+                          : "Unavailable"}
+                      </dd>
+                    </dl>
+                    <div className="admin-dashboard__stat-support">
+                      {total.status === "unavailable" ? (
+                        <RetryButton
+                          isPending={pendingKeys.has(card.total)}
+                          label={`${getStatisticLabel(card.total)} count`}
+                          onRetry={() => void retryStatistic(card.total)}
+                        />
+                      ) : (
+                        <p>
+                          {total.count === 0
+                            ? `No ${card.plural} yet.`
+                            : `${total.count.toLocaleString()} ${total.count === 1 ? card.singular : card.plural} stored.`}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <dl className="admin-dashboard__stat-secondary">
+                      <dt>{card.secondaryLabel}</dt>
+                      <dd>
+                        {secondary.status === "available"
+                          ? secondary.count.toLocaleString()
+                          : "Unavailable"}
+                      </dd>
+                    </dl>
+                    <div className="admin-dashboard__stat-support">
+                      {secondary.status === "unavailable" ? (
+                        <RetryButton
+                          isPending={pendingKeys.has(card.secondary)}
+                          label={`${getStatisticLabel(card.secondary)} count`}
+                          onRetry={() => void retryStatistic(card.secondary)}
+                        />
+                      ) : (
+                        <p>
+                          {card.secondaryLabel === "New" && secondary.count === 0
+                            ? "No new messages."
+                            : card.secondaryLabel === "Published" && secondary.count === 0
+                              ? "No published records."
+                              : card.secondaryLabel === "New"
+                                ? "Awaiting review."
+                                : "Available on the public site."}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <dl className="admin-dashboard__stat-secondary">
-                    <dt>{card.secondaryLabel}</dt>
-                    <dd>
-                      {secondary.status === "available"
-                        ? secondary.count.toLocaleString()
-                        : "Unavailable"}
-                    </dd>
-                  </dl>
-                  <div className="admin-dashboard__stat-support">
-                    {secondary.status === "unavailable" ? (
-                      <RetryButton
-                        isPending={pendingKeys.has(card.secondary)}
-                        label={`${getStatisticLabel(card.secondary)} count`}
-                        onRetry={() => void retryStatistic(card.secondary)}
-                      />
-                    ) : (
-                      <p>
-                        {card.secondaryLabel === "New" && secondary.count === 0
-                          ? "No new messages."
-                          : card.secondaryLabel === "Published" && secondary.count === 0
-                            ? "No published records."
-                            : card.secondaryLabel === "New"
-                              ? "Awaiting review."
-                              : "Available on the public site."}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </Card>
-          );
-        })}
+              </Card>
+            );
+          })}
       </div>
       <p aria-live="polite" className="admin-dashboard__statistics-announcement" role="status">
         {announcement}

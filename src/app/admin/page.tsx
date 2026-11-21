@@ -20,7 +20,7 @@ import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { DashboardStatistics } from "./dashboard-statistics";
 import { loadAdminDashboardStatistics } from "@/lib/admin-dashboard-statistics";
-import { ADMIN_DASHBOARD_STATISTIC_KEYS } from "@/lib/admin-dashboard-statistics-types";
+import { getAdminDashboardStatisticKeysForRole } from "@/lib/admin-dashboard-statistics-types";
 import { validateAdminSession } from "@/lib/auth/session";
 import { logAdminAuthDiagnostic } from "@/lib/auth/auth-diagnostics";
 
@@ -38,6 +38,7 @@ const dashboardQuickLinks: {
   description: string;
   href: string;
   icon: LucideIcon;
+  adminOnly?: boolean;
 }[] = [
   { label: "Profile", description: "Update public profile details.", href: "/admin/profile", icon: UserRound },
   { label: "Projects", description: "Manage project records and publication.", href: "/admin/projects", icon: FolderKanban },
@@ -45,7 +46,7 @@ const dashboardQuickLinks: {
   { label: "Blog posts", description: "Write and organize blog posts.", href: "/admin/blog", icon: FileText },
   { label: "Education", description: "Manage academic records.", href: "/admin/education", icon: GraduationCap },
   { label: "Work experience", description: "Manage experience records.", href: "/admin/experience", icon: BriefcaseBusiness },
-  { label: "Messages", description: "Review contact form submissions.", href: "/admin/messages", icon: Mail },
+  { label: "Messages", description: "Review contact form submissions.", href: "/admin/messages", icon: Mail, adminOnly: true },
   { label: "Settings", description: "Change the admin account password.", href: "/admin/settings", icon: Settings },
 ];
 
@@ -103,7 +104,7 @@ async function AdminDashboardContent() {
         </div>
 
         <Suspense fallback={<SummaryLoading />}>
-          <DashboardSummary />
+          <DashboardSummary isAdmin={session.user.role === "ADMIN"} />
         </Suspense>
       </section>
 
@@ -116,27 +117,31 @@ async function AdminDashboardContent() {
           <p>Open a workspace to review or update its records.</p>
         </div>
         <div className="admin-dashboard__quick-links">
-          {dashboardQuickLinks.map((item) => (
-            <Card className="admin-dashboard__quick-link-card" key={item.href} variant="outlined">
-              <Link href={item.href}>
-                <item.icon aria-hidden="true" className="admin-dashboard__quick-link-icon" size={17} />
-                <span className="admin-dashboard__quick-link-copy">
-                  <strong>{item.label}</strong>
-                  <span>{item.description}</span>
-                </span>
-                <ArrowUpRight aria-hidden="true" className="admin-dashboard__quick-link-arrow" size={16} />
-              </Link>
-            </Card>
-          ))}
+          {dashboardQuickLinks
+            .filter((item) => !item.adminOnly || session.user.role === "ADMIN")
+            .map((item) => (
+              <Card className="admin-dashboard__quick-link-card" key={item.href} variant="outlined">
+                <Link href={item.href}>
+                  <item.icon aria-hidden="true" className="admin-dashboard__quick-link-icon" size={17} />
+                  <span className="admin-dashboard__quick-link-copy">
+                    <strong>{item.label}</strong>
+                    <span>{item.description}</span>
+                  </span>
+                  <ArrowUpRight aria-hidden="true" className="admin-dashboard__quick-link-arrow" size={16} />
+                </Link>
+              </Card>
+            ))}
         </div>
       </section>
     </>
   );
 }
 
-async function DashboardSummary() {
-  const statistics = await loadAdminDashboardStatistics(ADMIN_DASHBOARD_STATISTIC_KEYS);
-  return <DashboardStatistics initialStatistics={statistics} />;
+async function DashboardSummary({ isAdmin }: { isAdmin: boolean }) {
+  const statistics = await loadAdminDashboardStatistics(
+    getAdminDashboardStatisticKeysForRole(isAdmin),
+  );
+  return <DashboardStatistics initialStatistics={statistics} isAdmin={isAdmin} />;
 }
 
 function SummaryLoading() {

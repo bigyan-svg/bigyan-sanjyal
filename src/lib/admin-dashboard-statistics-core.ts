@@ -84,6 +84,7 @@ export function parseAdminDashboardMetricRequest(
 
 export interface AdminDashboardStatisticsHandlerDependencies {
   authorize: (request: Request) => Promise<Response | null>;
+  authorizeAdminOnly: (request: Request) => Promise<Response | null>;
   queries: AdminDashboardCountQueries;
 }
 
@@ -98,14 +99,21 @@ export async function handleAdminDashboardStatisticsRequest(
   request: Request,
   dependencies: AdminDashboardStatisticsHandlerDependencies,
 ): Promise<Response> {
+  const metrics = parseAdminDashboardMetricRequest(request);
+  const requiresAdmin = metrics?.some(
+    (key) => key === "messagesTotal" || key === "messagesNew",
+  );
+
   try {
-    const authorizationError = await dependencies.authorize(request);
+    const authorize = requiresAdmin
+      ? dependencies.authorizeAdminOnly
+      : dependencies.authorize;
+    const authorizationError = await authorize(request);
     if (authorizationError) return authorizationError;
   } catch {
     return jsonResponse({ error: "Unable to authorize this request." }, 500);
   }
 
-  const metrics = parseAdminDashboardMetricRequest(request);
   if (!metrics) return jsonResponse({ error: "Invalid statistics request." }, 400);
 
   const statistics = await loadAdminDashboardStatistics(metrics, dependencies.queries);

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDismissableLayer } from "@/hooks/use-dismissable-layer";
+import { useDocumentScrollLock } from "@/hooks/use-document-scroll-lock";
 
 const navigationItems = [
   { label: "Home", href: "/" },
@@ -38,21 +39,12 @@ export function SiteHeader({
     onEscape: closeMenuAndRestoreFocus,
   });
 
+  useDocumentScrollLock(menuOpen);
+
   useEffect(() => {
     if (!menuOpen) return;
 
-    const root = document.documentElement;
-    const body = document.body;
-    const previousRootOverflow = root.style.overflow;
-    const previousBodyOverflow = body.style.overflow;
-    root.style.overflow = "hidden";
-    body.style.overflow = "hidden";
-    closeButtonRef.current?.focus();
-
-    return () => {
-      root.style.overflow = previousRootOverflow;
-      body.style.overflow = previousBodyOverflow;
-    };
+    closeButtonRef.current?.focus({ preventScroll: true });
   }, [menuOpen]);
 
   useEffect(() => {
@@ -66,7 +58,8 @@ export function SiteHeader({
           const currentLink = desktopNavigationRef.current?.querySelector<HTMLElement>(
             'a[aria-current="page"]',
           );
-          (currentLink ?? desktopNavigationRef.current?.querySelector<HTMLElement>("a"))?.focus();
+          (currentLink ?? desktopNavigationRef.current?.querySelector<HTMLElement>("a"))
+            ?.focus({ preventScroll: true });
         });
       }
     }
@@ -84,7 +77,7 @@ export function SiteHeader({
 
   function closeMenuAndRestoreFocus() {
     setMenuOpen(false);
-    menuButtonRef.current?.focus();
+    menuButtonRef.current?.focus({ preventScroll: true });
   }
 
   function handleDrawerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {

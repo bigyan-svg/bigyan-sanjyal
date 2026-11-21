@@ -1,7 +1,7 @@
 import { Prisma } from "../../src/generated/prisma/client";
 
 export interface PreviewFirstAdminStore {
-  $executeRawUnsafe(query: string, ...values: unknown[]): Promise<unknown>;
+  $queryRawUnsafe(query: string, ...values: unknown[]): Promise<unknown>;
   adminUser: {
     count(args?: { where?: Record<string, never> }): Promise<number>;
     create(args: {
@@ -25,14 +25,18 @@ export class PreviewFirstAdminError extends Error {
 
 export const PREVIEW_ADMIN_ADVISORY_LOCK_NAMESPACE = 1112109145;
 export const PREVIEW_ADMIN_ADVISORY_LOCK_ID = 1;
+export const PREVIEW_ADMIN_ADVISORY_LOCK_QUERY =
+  "SELECT pg_advisory_xact_lock($1::integer, $2::integer) IS NOT NULL AS locked";
 
 export async function provisionFirstPreviewAdmin(
   transaction: PreviewFirstAdminStore,
   email: string,
   passwordHash: string,
 ): Promise<{ id: string }> {
-  await transaction.$executeRawUnsafe(
-    `SELECT pg_advisory_xact_lock(${PREVIEW_ADMIN_ADVISORY_LOCK_NAMESPACE}, ${PREVIEW_ADMIN_ADVISORY_LOCK_ID})`,
+  await transaction.$queryRawUnsafe(
+    PREVIEW_ADMIN_ADVISORY_LOCK_QUERY,
+    PREVIEW_ADMIN_ADVISORY_LOCK_NAMESPACE,
+    PREVIEW_ADMIN_ADVISORY_LOCK_ID,
   );
 
   const accountCount = await transaction.adminUser.count();

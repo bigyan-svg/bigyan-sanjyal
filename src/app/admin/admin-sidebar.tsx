@@ -19,6 +19,7 @@ import {
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { AdminRole } from "@/generated/prisma/client";
 import { useDismissableLayer } from "@/hooks/use-dismissable-layer";
+import { useDocumentScrollLock } from "@/hooks/use-document-scroll-lock";
 import { isAdminNavigationItemActive } from "@/lib/admin-navigation";
 import { LogoutButton } from "./logout-button";
 
@@ -26,6 +27,7 @@ const navigationItems: {
   label: string;
   icon: LucideIcon;
   href: string;
+  adminOnly?: boolean;
 }[] = [
   { label: "Overview", icon: LayoutDashboard, href: "/admin" },
   { label: "Profile", icon: UserRound, href: "/admin/profile" },
@@ -34,7 +36,7 @@ const navigationItems: {
   { label: "Blog Posts", icon: FileText, href: "/admin/blog" },
   { label: "Education", icon: GraduationCap, href: "/admin/education" },
   { label: "Work Experience", icon: BriefcaseBusiness, href: "/admin/experience" },
-  { label: "Messages", icon: Mail, href: "/admin/messages" },
+  { label: "Messages", icon: Mail, href: "/admin/messages", adminOnly: true },
   { label: "Settings", icon: Settings, href: "/admin/settings" },
 ];
 
@@ -55,7 +57,9 @@ export function AdminSidebar({ email, role }: { email: string; role: AdminRole }
 
   const closeMenuAndRestoreFocus = useCallback(() => {
     setMenuOpen(false);
-    window.requestAnimationFrame(() => menuButtonRef.current?.focus());
+    window.requestAnimationFrame(() =>
+      menuButtonRef.current?.focus({ preventScroll: true }),
+    );
   }, [setMenuOpen]);
 
   useDismissableLayer({
@@ -65,21 +69,12 @@ export function AdminSidebar({ email, role }: { email: string; role: AdminRole }
     onEscape: closeMenuAndRestoreFocus,
   });
 
+  useDocumentScrollLock(menuOpen);
+
   useEffect(() => {
     if (!menuOpen) return;
 
-    const root = document.documentElement;
-    const body = document.body;
-    const previousRootOverflow = root.style.overflow;
-    const previousBodyOverflow = body.style.overflow;
-    root.style.overflow = "hidden";
-    body.style.overflow = "hidden";
-    closeButtonRef.current?.focus();
-
-    return () => {
-      root.style.overflow = previousRootOverflow;
-      body.style.overflow = previousBodyOverflow;
-    };
+    closeButtonRef.current?.focus({ preventScroll: true });
   }, [menuOpen]);
 
   useEffect(() => {
@@ -104,7 +99,7 @@ export function AdminSidebar({ email, role }: { email: string; role: AdminRole }
         const activeLink = sidebarRef.current?.querySelector<HTMLElement>(
           'a[aria-current="page"]',
         );
-        activeLink?.focus();
+        activeLink?.focus({ preventScroll: true });
       });
     }
 
@@ -229,7 +224,7 @@ export function AdminSidebar({ email, role }: { email: string; role: AdminRole }
         <nav aria-label="Dashboard sections" className="admin-dashboard__navigation">
           <p className="admin-dashboard__nav-heading">Workspace</p>
           <ul>
-            {navigationItems.map((item) => {
+            {navigationItems.filter((item) => !item.adminOnly || role === "ADMIN").map((item) => {
               const Icon = item.icon;
               const isActive = isAdminNavigationItemActive(pathname, item.href);
 

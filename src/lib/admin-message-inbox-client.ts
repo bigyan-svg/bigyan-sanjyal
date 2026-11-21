@@ -39,6 +39,35 @@ export type AdminMessageFetcher = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export class AdminMessageConflictError extends Error {
+  readonly currentMessage: AdminMessageDetail | null;
+
+  constructor(value: unknown) {
+    super("This message changed elsewhere.");
+    this.name = "AdminMessageConflictError";
+    this.currentMessage = isAdminMessageDetail(value) ? value : null;
+  }
+}
+
+function isAdminMessageDetail(value: unknown): value is AdminMessageDetail {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const message = value as Record<string, unknown>;
+  return (
+    typeof message.id === "string" &&
+    typeof message.name === "string" &&
+    typeof message.email === "string" &&
+    (typeof message.subject === "string" || message.subject === null) &&
+    ["NEW", "READ", "ARCHIVED", "SPAM"].includes(String(message.status)) &&
+    typeof message.createdAt === "string" &&
+    typeof message.message === "string" &&
+    (typeof message.readAt === "string" || message.readAt === null) &&
+    typeof message.updatedAt === "string"
+  );
+}
+
 async function readJsonResponse(response: Response): Promise<AdminMessageJsonResponse> {
   try {
     const value: unknown = await response.json();
@@ -82,6 +111,9 @@ export async function requestAdminMessageAction(
   });
   const result = await readJsonResponse(response);
 
+  if (response.status === 409) {
+    throw new AdminMessageConflictError(result.message);
+  }
   if (!response.ok || typeof result.message !== "object" || result.message === null) {
     throw new Error("Unable to update the message.");
   }

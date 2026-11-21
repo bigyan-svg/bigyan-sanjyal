@@ -50,6 +50,17 @@ test("Profile and Settings route modules keep their own forms separate", async (
   assert.doesNotMatch(settings, /ProfileForm/u);
 });
 
+test("the Messages page redirects EDITORs and the sidebar exposes its link only to ADMIN", async () => {
+  const [messagesPage, sidebar] = await Promise.all([
+    readFile(new URL("../src/app/admin/messages/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/app/admin/admin-sidebar.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(messagesPage, /if \(!session\)\s*\{\s*redirect\("\/admin\/login"\);\s*\}\s*if \(session\.user\.role !== "ADMIN"\) redirect\("\/admin"\);/u);
+  assert.match(sidebar, /\{ label: "Messages", icon: Mail, href: "\/admin\/messages", adminOnly: true \}/u);
+  assert.match(sidebar, /navigationItems\.filter\(\(item\) => !item\.adminOnly \|\| role === "ADMIN"\)/u);
+});
+
 test("navigation highlights the current section without conflating Profile and Settings", () => {
   assert.equal(isAdminNavigationItemActive("/admin/profile", "/admin/profile"), true);
   assert.equal(isAdminNavigationItemActive("/admin/settings", "/admin/settings"), true);

@@ -4,12 +4,17 @@ import {
   ADMIN_MESSAGES_PAGE_SIZE,
   handleAdminMessagePatch,
   handleAdminMessagesList,
+  performAdminMessageAction,
   resolveContactMessageTransition,
   type AdminMessageDetail,
   type AdminMessageListDependencies,
   type AdminMessageListItem,
   type AdminMessagePatchDependencies,
 } from "../src/lib/admin-messages";
+import {
+  authorizeAdminOnlyContentReadRequest,
+  authorizeAdminOnlySessionToken,
+} from "../src/lib/auth/admin-content-session";
 
 const VALID_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_ID = "22222222-2222-4222-8222-222222222222";
@@ -42,19 +47,38 @@ function detail(
   };
 }
 
-function listRequest(query = ""): Request {
-  return new Request(`https://example.test/api/admin/messages${query}`);
+function listRequest(query = "", sessionToken?: string): Request {
+  const headers = new Headers();
+  if (sessionToken) headers.set("Cookie", `admin_session=${sessionToken}`);
+  return new Request(`https://example.test/api/admin/messages${query}`, { headers });
 }
 
-function patchRequest(body: unknown): Request {
+function patchRequest(body: unknown, sessionToken?: string): Request {
+  const headers = new Headers({
+    Origin: "https://example.test",
+    "Content-Type": "application/json",
+  });
+  if (sessionToken) headers.set("Cookie", `admin_session=${sessionToken}`);
   return new Request(`https://example.test/api/admin/messages/${VALID_ID}`, {
     method: "PATCH",
-    headers: {
-      Origin: "https://example.test",
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify(body),
   });
+}
+
+function validateRoleSession(token: string) {
+  if (token === "admin-session") return Promise.resolve({ user: { role: "ADMIN" } });
+  if (token === "editor-session") return Promise.resolve({ user: { role: "EDITOR" } });
+  return Promise.resolve(null);
+}
+
+function authorizeAdminOnlyWrite(request: Request): Promise<Response | null> {
+  const token = request.headers.get("cookie")
+    ?.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith("admin_session="))
+    ?.slice("admin_session=".length);
+  return authorizeAdminOnlySessionToken(token, validateRoleSession);
 }
 
 function listDependencies(
@@ -128,6 +152,140 @@ test("message listing denies unauthorized access before database queries", async
   const response = await handleAdminMessagesList(listRequest(), dependencies);
 
   assert.equal(response.status, 401);
+  assert.equal(databaseCalls, 0);
+});
+
+test("message listing denies EDITOR before querying data and permits ADMIN", async () => {
+  let editorDatabaseCalls = 0;
+  const editor = listDependencies({
+    authorize: (request) => authorizeAdminOnlyContentReadRequest(request, validateRoleSession),
+    findMessages: async () => {
+      editorDatabaseCalls += 1;
+      return [];
+    },
+    countMessages: async () => {
+      editorDatabaseCalls += 1;
+      return 0;
+    },
+    countNewMessages: async () => {
+      editorDatabaseCalls += 1;
+      return 0;
+    },
+  });
+
+  const editorResponse = await handleAdminMessagesList(
+    listRequest("", "editor-session"),
+    editor.dependencies,
+  );
+
+  assert.equal(editorResponse.status, 403);
+  assert.equal(editorDatabaseCalls, 0);
+
+  const admin = listDependencies({
+    authorize: (request) => authorizeAdminOnlyContentReadRequest(request, validateRoleSession),
+  });
+  const adminResponse = await handleAdminMessagesList(
+    listRequest("", "admin-session"),
+    admin.dependencies,
+  );
+  const adminBody = await adminResponse.json();
+
+  assert.equal(adminResponse.status, 200);
+  assert.equal(admin.calls.find?.take, ADMIN_MESSAGES_PAGE_SIZE);
+  assert.equal(adminBody.messages[0].email, "sender@example.test");
+  assert.equal(adminBody.messages[0].subject, "A question");
+});
+
+test("message detail and status operations deny EDITOR before mutation and permit ADMIN", async () => {
+  let editorMutationCalls = 0;
+  const editor = patchDependencies({
+    authorize: authorizeAdminOnlyWrite,
+    performAction: async () => {
+      editorMutationCalls += 1;
+      return detail(VALID_ID);
+    },
+  });
+  const editorResponse = await handleAdminMessagePatch(
+    patchRequest({ action: "open" }, "editor-session"),
+    VALID_ID,
+    editor.dependencies,
+  );
+
+  assert.equal(editorResponse.status, 403);
+  assert.equal(editorMutationCalls, 0);
+
+  const admin = patchDependencies({ authorize: authorizeAdminOnlyWrite });
+  const openResponse = await handleAdminMessagePatch(
+    patchRequest({ action: "open" }, "admin-session"),
+    VALID_ID,
+    admin.dependencies,
+  );
+  const opened = await openResponse.json();
+  assert.equal(openResponse.status, 200);
+  assert.equal(opened.message.message, "Line one.\n<script>alert('plain text')</script>");
+  assert.equal(admin.calls.count, 1);
+
+  const statusResponse = await handleAdminMessagePatch(
+    patchRequest({ status: "ARCHIVED" }, "admin-session"),
+    VALID_ID,
+    admin.dependencies,
+  );
+  assert.equal(statusResponse.status, 200);
+  assert.deepEqual(admin.calls.action, { kind: "status", status: "ARCHIVED" });
+  assert.equal(admin.calls.count, 2);
+});
+
+test("message list and write handlers return 401 for unauthenticated role fixtures", async () => {
+  const list = listDependencies({
+    authorize: (request) => authorizeAdminOnlyContentReadRequest(request, validateRoleSession),
+  });
+  const listResponse = await handleAdminMessagesList(listRequest(), list.dependencies);
+  assert.equal(listResponse.status, 401);
+  assert.deepEqual(await listResponse.json(), { error: "Authentication is required." });
+  assert.equal(list.calls.find, undefined);
+
+  let mutationCalls = 0;
+  const patch = patchDependencies({
+    authorize: authorizeAdminOnlyWrite,
+    performAction: async () => {
+      mutationCalls += 1;
+      return detail(VALID_ID);
+    },
+  });
+  const patchResponse = await handleAdminMessagePatch(
+    patchRequest({ status: "READ" }),
+    VALID_ID,
+    patch.dependencies,
+  );
+  assert.equal(patchResponse.status, 401);
+  assert.equal(mutationCalls, 0);
+});
+
+test("message listing denies editor access before database queries", async () => {
+  let databaseCalls = 0;
+  const denied = Response.json(
+    { error: "You are not authorized to manage site content." },
+    { status: 403, headers: { "Cache-Control": "no-store" } },
+  );
+  const { dependencies } = listDependencies({
+    authorize: async () => denied,
+    findMessages: async () => {
+      databaseCalls += 1;
+      return [];
+    },
+    countMessages: async () => {
+      databaseCalls += 1;
+      return 0;
+    },
+    countNewMessages: async () => {
+      databaseCalls += 1;
+      return 0;
+    },
+  });
+
+  const response = await handleAdminMessagesList(listRequest(), dependencies);
+
+  assert.equal(response.status, 403);
   assert.equal(databaseCalls, 0);
 });
 
@@ -288,6 +446,47 @@ test("status transitions mark read, archive or spam, and restore to new", () => 
   }
 });
 
+test("message status updates return 409 when concurrent writes exhaust retries", async () => {
+  let state: { status: AdminMessageDetail["status"]; readAt: Date | null } = {
+    status: "NEW",
+    readAt: null,
+  };
+  let updateAttempts = 0;
+  let detailReads = 0;
+  const { dependencies } = patchDependencies({
+    performAction: (id, action, now) =>
+      performAdminMessageAction({
+        findState: async () => ({ ...state }),
+        updateState: async () => {
+          updateAttempts += 1;
+          state = {
+            status: updateAttempts === 1 ? "READ" : "SPAM",
+            readAt: NOW,
+          };
+          return false;
+        },
+        findDetail: async (messageId) => {
+          detailReads += 1;
+          return detail(messageId, state.status, state.readAt);
+        },
+      }, id, action, now),
+  });
+
+  const response = await handleAdminMessagePatch(
+    patchRequest({ status: "ARCHIVED" }),
+    VALID_ID,
+    dependencies,
+  );
+  const result = await response.json();
+
+  assert.equal(response.status, 409);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(result.error, "This message changed elsewhere. Review its current state and try again.");
+  assert.equal(result.message.status, "SPAM");
+  assert.equal(updateAttempts, 2);
+  assert.equal(detailReads, 1);
+});
+
 test("message status updates require authorization before action handling", async () => {
   let actions = 0;
   const denied = Response.json({ error: "Authentication is required." }, { status: 401 });
@@ -306,6 +505,30 @@ test("message status updates require authorization before action handling", asyn
   );
 
   assert.equal(response.status, 401);
+  assert.equal(actions, 0);
+});
+
+test("message details and status updates deny editor access before action handling", async () => {
+  let actions = 0;
+  const denied = Response.json(
+    { error: "You are not authorized to manage site content." },
+    { status: 403, headers: { "Cache-Control": "no-store" } },
+  );
+  const { dependencies } = patchDependencies({
+    authorize: async () => denied,
+    performAction: async () => {
+      actions += 1;
+      return null;
+    },
+  });
+
+  const response = await handleAdminMessagePatch(
+    patchRequest({ action: "open" }),
+    VALID_ID,
+    dependencies,
+  );
+
+  assert.equal(response.status, 403);
   assert.equal(actions, 0);
 });
 

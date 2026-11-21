@@ -61,3 +61,18 @@ export function assertPreviewAdminConfirmation(
     );
   }
 }
+
+export function getPreviewEditorConfirmation(target: PreviewAdminTarget): string {
+  return `PROVISION PREVIEW EDITOR ${target.display}`;
+}
+
+export function assertPreviewEditorConfirmation(
+  enteredConfirmation: string,
+  target: PreviewAdminTarget,
+): void {
+  if (enteredConfirmation !== getPreviewEditorConfirmation(target)) {
+    throw new PreviewAdminTargetError(
+      "Preview Editor target confirmation did not match.",
+    );
+  }
+}

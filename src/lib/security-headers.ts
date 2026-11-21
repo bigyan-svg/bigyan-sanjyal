@@ -8,6 +8,38 @@ export const SECURITY_HEADERS = [
   },
 ] as const;
 
+export const CSP_REPORT_ONLY_ENABLED = true;
+
+// The HTTPS image source is provisional. Investigate framework-generated inline
+// scripts/styles and streamed RSC payload violations before considering enforcement.
+export const CSP_REPORT_ONLY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "frame-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' https:",
+  "font-src 'self'",
+  "connect-src 'self'",
+].join("; ");
+
+export function getSecurityHeaders(
+  reportOnlyEnabled = CSP_REPORT_ONLY_ENABLED,
+) {
+  if (!reportOnlyEnabled) return [...SECURITY_HEADERS];
+
+  return [
+    ...SECURITY_HEADERS,
+    {
+      key: "Content-Security-Policy-Report-Only",
+      value: CSP_REPORT_ONLY_POLICY,
+    },
+  ];
+}
+
 export function getStrictTransportSecurityHeader(
   nodeEnv: string | undefined,
   protocol: string,

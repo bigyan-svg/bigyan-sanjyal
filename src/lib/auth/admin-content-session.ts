@@ -43,6 +43,21 @@ export async function authorizeAdminContentSessionToken(
   token: string | undefined,
   validateSession: AdminContentSessionValidator,
 ): Promise<Response | null> {
+  return authorizeAdminSessionToken(token, validateSession, ["ADMIN", "EDITOR"]);
+}
+
+export async function authorizeAdminOnlySessionToken(
+  token: string | undefined,
+  validateSession: AdminContentSessionValidator,
+): Promise<Response | null> {
+  return authorizeAdminSessionToken(token, validateSession, ["ADMIN"]);
+}
+
+async function authorizeAdminSessionToken(
+  token: string | undefined,
+  validateSession: AdminContentSessionValidator,
+  allowedRoles: readonly string[],
+): Promise<Response | null> {
   if (!token) {
     logAdminAuthDiagnostic({
       boundary: "admin-api",
@@ -59,7 +74,7 @@ export async function authorizeAdminContentSessionToken(
       return adminContentResponse({ error: "Authentication is required." }, 401);
     }
 
-    if (session.user.role !== "ADMIN" && session.user.role !== "EDITOR") {
+    if (!allowedRoles.includes(session.user.role)) {
       logAdminAuthDiagnostic({
         boundary: "admin-api",
         outcome: "rejected",
@@ -82,4 +97,11 @@ export function authorizeAdminContentReadRequest(
   validateSession: AdminContentSessionValidator,
 ): Promise<Response | null> {
   return authorizeAdminContentSessionToken(getAdminSessionToken(request), validateSession);
+}
+
+export function authorizeAdminOnlyContentReadRequest(
+  request: Request,
+  validateSession: AdminContentSessionValidator,
+): Promise<Response | null> {
+  return authorizeAdminOnlySessionToken(getAdminSessionToken(request), validateSession);
 }
