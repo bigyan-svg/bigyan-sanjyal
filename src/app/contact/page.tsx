@@ -38,6 +38,36 @@ function socialIcon(label: string) {
   return ExternalLink;
 }
 
+async function SocialProfiles() {
+  const profile = await getPublicSiteProfile();
+  const socialLinks = profile?.socialLinks ?? [];
+
+  return socialLinks.length > 0 ? (
+    <nav aria-label="Social and contact profiles" className="contact-social__links">
+      {socialLinks.map((link) => {
+        const Icon = socialIcon(link.label);
+        return (
+          <a
+            className="contact-social__link"
+            href={link.url}
+            key={link.label + link.url}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            <span className="contact-social__icon" aria-hidden="true"><Icon size={20} /></span>
+            <span>{link.label}</span>
+            <ExternalLink aria-hidden="true" className="contact-social__external" size={14} />
+          </a>
+        );
+      })}
+    </nav>
+  ) : (
+    <p className="contact-social__empty">
+      Social profiles will appear here when they are added in the website profile settings.
+    </p>
+  );
+}
+
 export default function ContactPage() {
   return (
     <>
