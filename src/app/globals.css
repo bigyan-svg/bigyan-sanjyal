@@ -7396,3 +7396,70 @@ body, p, li, label, small, strong, .brand__name,
     opacity: 1 !important;
   }
 }
+
+
+/* Social contact links: rendered from the public profile's configured links. */
+.contact-social {
+  margin-top: clamp(3rem, 7vw, 5.5rem);
+  padding-top: clamp(2rem, 4vw, 3rem);
+  border-top: 1px solid rgb(145 113 71 / 16%);
+}
+.contact-social .section-heading {
+  margin-bottom: 1.6rem;
+}
+.contact-social__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .85rem;
+}
+.contact-social__link {
+  display: inline-flex;
+  align-items: center;
+  gap: .75rem;
+  min-height: 3.35rem;
+  padding: .65rem 1rem .65rem .7rem;
+  border: 1px solid rgb(164 128 76 / 22%);
+  border-radius: 1rem;
+  background: rgb(255 255 255 / 64%);
+  color: #211e19;
+  box-shadow: 0 .5rem 1.5rem rgb(83 62 35 / 4%);
+  text-decoration: none;
+  transition: transform 220ms ease, border-color 220ms ease,
+    box-shadow 220ms ease, background 220ms ease;
+  backdrop-filter: blur(14px);
+}
+.contact-social__link:hover {
+  transform: translateY(-3px);
+  border-color: rgb(173 133 73 / 52%);
+  background: rgb(255 255 255 / 88%);
+  box-shadow: 0 .8rem 1.8rem rgb(83 62 35 / 9%);
+}
+.contact-social__icon {
+  display: grid;
+  place-items: center;
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: .7rem;
+  color: #9b753e;
+  background: linear-gradient(145deg, rgb(239 224 198 / 65%), rgb(255 255 255 / 82%));
+}
+.contact-social__external {
+  opacity: .5;
+  margin-left: .1rem;
+}
+.contact-social__empty {
+  max-width: 42rem;
+  padding: 1rem 1.2rem;
+  border: 1px dashed rgb(164 128 76 / 28%);
+  border-radius: 1rem;
+  color: #62594d;
+  background: rgb(255 255 255 / 40%);
+}
+@media (max-width: 40rem) {
+  .contact-social__links { display: grid; grid-template-columns: 1fr 1fr; }
+  .contact-social__link { min-width: 0; padding-right: .65rem; gap: .55rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .contact-social__link { transition: none; }
+  .contact-social__link:hover { transform: none; }
+}
