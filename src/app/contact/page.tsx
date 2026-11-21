@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { connection } from "next/server";
 import {
   Mail,
   Code2,
@@ -15,9 +16,6 @@ import { Container } from "@/components/ui/container";
 import { PageIntro } from "@/components/ui/page-intro";
 import { getPublicSiteProfile } from "@/lib/site-profile";
 import { ContactForm } from "./contact-form";
-
-// The social links come from the live profile database; render this route at request time.
-export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Contact",
@@ -41,6 +39,9 @@ function socialIcon(label: string) {
 }
 
 export default async function ContactPage() {
+  // Cache Components requires connection() instead of route-level dynamic config
+  // when the page reads live, uncached profile data.
+  await connection();
   const profile = await getPublicSiteProfile();
   const socialLinks = profile?.socialLinks ?? [];
 
