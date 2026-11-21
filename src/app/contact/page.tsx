@@ -16,6 +16,9 @@ import { PageIntro } from "@/components/ui/page-intro";
 import { getPublicSiteProfile } from "@/lib/site-profile";
 import { ContactForm } from "./contact-form";
 
+// The social links come from the live profile database; render this route at request time.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Contact",
   description: "Contact Bigyan Sanjyal using the website's message form or public social profiles for questions and project inquiries.",
