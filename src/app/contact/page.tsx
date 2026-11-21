@@ -25,7 +25,7 @@ export const metadata: Metadata = {
   },
 };
 
-const contactLinks = [
+const contactLinks: Array<{\n  label: string;\n  detail: string;\n  href: string;\n  icon?: LucideIcon;\n  mark?: string;\n  markClass?: string;\n}> = [
   {
     label: "Facebook",
     detail: "facebook.com/bigyan97",
