@@ -1,23 +1,50 @@
 import type { Metadata } from "next";
-import { Mail } from "lucide-react";
+import {
+  Mail,
+  Facebook,
+  Github,
+  Linkedin,
+  MessageCircle,
+  Instagram,
+  Youtube,
+  Send,
+  ExternalLink,
+} from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Container } from "@/components/ui/container";
 import { PageIntro } from "@/components/ui/page-intro";
+import { getPublicSiteProfile } from "@/lib/site-profile";
 import { ContactForm } from "./contact-form";
 
 export const metadata: Metadata = {
   title: "Contact",
-  description: "Contact Bigyan Sanjyal using the website's message form for questions and project inquiries.",
+  description: "Contact Bigyan Sanjyal using the website's message form or public social profiles for questions and project inquiries.",
   alternates: {
     canonical: "/contact",
   },
 };
 
-export default function ContactPage() {
+function socialIcon(label: string) {
+  const value = label.toLowerCase();
+  if (value.includes("facebook")) return Facebook;
+  if (value.includes("github")) return Github;
+  if (value.includes("linkedin")) return Linkedin;
+  if (value.includes("whatsapp")) return MessageCircle;
+  if (value.includes("instagram")) return Instagram;
+  if (value.includes("youtube")) return Youtube;
+  if (value.includes("telegram")) return Send;
+  if (value.includes("mail") || value.includes("gmail") || value.includes("email")) return Mail;
+  return ExternalLink;
+}
+
+export default async function ContactPage() {
+  const profile = await getPublicSiteProfile();
+  const socialLinks = profile?.socialLinks ?? [];
+
   return (
     <>
       <PageIntro
-        description="Have a question or a project idea? Send a message using the form below."
+        description="Have a question or a project idea? Send a message using the form below, or connect through my public profiles."
         eyebrow="Contact / 06"
         id="contact-title"
         title="Get in touch."
@@ -33,10 +60,9 @@ export default function ContactPage() {
                 <Mail size={20} />
               </span>
               <p className="eyebrow">Contact details</p>
-              <h2>No public contact details yet.</h2>
+              <h2>Connect with me.</h2>
               <p>
-                An email address, phone number, or social profile has not been
-                provided for publication.
+                Use the message form or choose one of my public profiles below.
               </p>
             </Card>
 
@@ -44,6 +70,40 @@ export default function ContactPage() {
               <ContactForm />
             </Card>
           </div>
+
+          <section aria-labelledby="social-contact-title" className="contact-social">
+            <div className="section-heading">
+              <p className="eyebrow">Around the web</p>
+              <h2 id="social-contact-title">Find me on social platforms.</h2>
+              <p>Choose a profile to connect, follow, or send a message.</p>
+            </div>
+            {socialLinks.length > 0 ? (
+              <nav aria-label="Social and contact profiles" className="contact-social__links">
+                {socialLinks.map((link) => {
+                  const Icon = socialIcon(link.label);
+                  return (
+                    <a
+                      className="contact-social__link"
+                      href={link.url}
+                      key={link.label + link.url}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      <span className="contact-social__icon" aria-hidden="true">
+                        <Icon size={20} />
+                      </span>
+                      <span>{link.label}</span>
+                      <ExternalLink aria-hidden="true" className="contact-social__external" size={14} />
+                    </a>
+                  );
+                })}
+              </nav>
+            ) : (
+              <p className="contact-social__empty">
+                Social profiles will appear here when they are added in the website profile settings.
+              </p>
+            )}
+          </section>
         </Container>
       </section>
     </>
