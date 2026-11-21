@@ -1,16 +1,6 @@
 import type { Metadata } from "next";
 
-import {
-  Mail,
-  Code2,
-  BriefcaseBusiness,
-  MessageCircle,
-  Camera,
-  CirclePlay,
-  Send,
-  ExternalLink,
-  Users,
-} from "lucide-react";
+import { Mail, Code2, MessageCircle, ExternalLink, type LucideIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Container } from "@/components/ui/container";
 import { PageIntro } from "@/components/ui/page-intro";
@@ -25,7 +15,14 @@ export const metadata: Metadata = {
   },
 };
 
-const contactLinks: Array<{\n  label: string;\n  detail: string;\n  href: string;\n  icon?: LucideIcon;\n  mark?: string;\n  markClass?: string;\n}> = [
+const contactLinks: Array<{
+  label: string;
+  detail: string;
+  href: string;
+  icon?: LucideIcon;
+  mark?: string;
+  markClass?: string;
+}> = [
   {
     label: "Facebook",
     detail: "facebook.com/bigyan97",
