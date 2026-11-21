@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1672 941" preserveAspectRatio="xMidYMid slice">
+<defs>
+ <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fffdfa"/><stop offset=".5" stop-color="#f8f6f4"/><stop offset="1" stop-color="#fff"/></linearGradient>
+ <linearGradient id="silk" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff" stop-opacity=".96"/><stop offset=".5" stop-color="#e9e3df" stop-opacity=".42"/><stop offset="1" stop-color="#fff" stop-opacity=".9"/></linearGradient>
+ <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff5e3"/><stop offset=".25" stop-color="#d9b77f"/><stop offset=".48" stop-color="#fff8ec"/><stop offset=".72" stop-color="#c79b5e"/><stop offset="1" stop-color="#fff0d5"/></linearGradient>
+ <radialGradient id="glow"><stop stop-color="#fff" stop-opacity=".95"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1672" height="941" fill="url(#paper)"/>
+<path d="M-80 260C190 160 300 198 470 -60L630 -60C460 160 350 235 140 292S-40 380 -80 420Z" fill="url(#silk)"/>
+<path d="M-60 292C170 185 300 205 500 -50" fill="none" stroke="#fff" stroke-width="32" opacity=".82"/>
+<path d="M-20 265C190 162 300 193 493 -24" fill="none" stroke="url(#gold)" stroke-width="2.8" opacity=".85"/>
+<path d="M-100 620C180 710 370 850 660 800S1100 680 1320 560 1540 380 1710 290" fill="none" stroke="#fff" stroke-width="54" opacity=".78"/>
+<path d="M-100 642C190 735 380 860 670 814S1110 694 1330 576 1550 398 1710 316" fill="none" stroke="url(#silk)" stroke-width="34"/>
+<path d="M-80 625C180 720 380 842 668 798S1100 676 1322 560 1545 385 1710 300" fill="none" stroke="url(#gold)" stroke-width="2.4" opacity=".75"/>
+<path d="M-80 905C270 880 500 840 700 770S1050 650 1240 570 1490 440 1710 450" fill="none" stroke="#fff" stroke-width="24" opacity=".8"/>
+<path d="M-80 935C270 910 500 870 700 800S1050 680 1240 600 1490 470 1710 480" fill="none" stroke="url(#silk)" stroke-width="20"/>
+<path d="M1100 -80C1320 70 1510 100 1740 10V180C1520 235 1340 180 1180 85Z" fill="url(#silk)" opacity=".48"/>
+<path d="M1200 850C1400 760 1540 720 1710 760V1020H1200Z" fill="url(#silk)" opacity=".65"/>
+<g opacity=".62">
+ <ellipse cx="180" cy="170" rx="100" ry="72" fill="url(#glow)"/>
+ <ellipse cx="1510" cy="490" rx="120" ry="85" fill="url(#glow)"/>
+ <ellipse cx="820" cy="830" rx="140" ry="80" fill="url(#glow)"/>
+</g>
+<path d="M0 350C220 265 355 240 500 80" fill="none" stroke="#fff" stroke-width="3" opacity=".75"/>
+<path d="M0 675C250 760 410 870 690 835S1130 710 1370 580" fill="none" stroke="#fff" stroke-width="2" opacity=".9"/>
+</svg>
