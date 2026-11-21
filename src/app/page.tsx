@@ -76,7 +76,7 @@ export default function Home() {
                 alt="Portrait of Bigyan Sanjyal"
                 fill
                 priority
-                quality={95}
+                unoptimized
                 sizes="(max-width: 48rem) 82vw, (max-width: 75rem) 42vw, 500px"
                 className="hero-profile__image"
               />
