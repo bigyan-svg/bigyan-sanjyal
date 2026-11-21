@@ -7003,3 +7003,157 @@ body {
     background-position: center top;
   }
 }
+
+
+/* Phase 4: ivory silk-and-gold visual direction with neutral black typography. */
+:root {
+  --color-canvas: #faf8f6;
+  --color-canvas-soft: #f3efeb;
+  --color-surface: rgb(255 255 255 / 86%);
+  --color-surface-raised: #fff;
+  --color-text: #171513;
+  --color-muted: #49443f;
+  --color-muted-soft: #716a63;
+  --color-blue: #9b7745;
+  --color-blue-bright: #806037;
+  --color-cyan: #a88756;
+  --color-violet: #8b775f;
+  --color-border: rgb(115 91 62 / 18%);
+  --color-border-bright: rgb(166 127 70 / 38%);
+  --color-focus: #98713e;
+  --shadow-blue: 0 0 3.25rem rgb(174 139 88 / 12%);
+}
+
+html {
+  background-color: #faf8f6;
+  background-image: url("/images/ivory-silk-gold-waves.svg");
+  background-position: center top;
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+body {
+  color: #171513;
+  background: transparent;
+  background-color: transparent;
+}
+
+/* Neutral typography: remove the blue/lavender cast from headings, labels and links. */
+h1, h2, h3, h4, h5, h6,
+.hero h1, .section-heading h2, .page-intro h1,
+.destination-card h3, .journey-card h3, .about-note h3,
+.public-projects__card h2, .public-projects__card h3,
+.profile-card__copy h2, .contact-details h2,
+.public-education__institution, .public-education__program {
+  color: #171513;
+}
+
+body, p, li, label, small, strong, .brand__name,
+.primary-nav__link, .hero__role, .hero__description,
+.section-heading__description, .page-intro__description,
+.destination-card > p, .journey-card > p, .about-note > p,
+.public-projects__card p, .public-education__description,
+.form-field__label, .education-management__field-label {
+  color: #292521;
+}
+
+.eyebrow, .text-link, .public-blog__read-link,
+.public-projects__links a, .site-footer__nav a,
+.primary-nav__link[aria-current="page"] {
+  color: #795b32;
+}
+
+.primary-nav__link::after {
+  background: linear-gradient(90deg, #b38a4f, #e3c99b);
+}
+
+.text-gradient {
+  background: linear-gradient(105deg, #171513 0%, #55432c 55%, #987343 100%);
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.button--primary {
+  border-color: #9b7848;
+  background: linear-gradient(115deg, #8f6b3d, #b18b55 62%, #d2b783);
+  color: #fff;
+  box-shadow: 0 .5rem 1.4rem rgb(128 94 49 / 18%);
+}
+.button--primary:hover:not(:disabled) {
+  background: linear-gradient(115deg, #795a34, #a27b48 62%, #c6a56f);
+}
+.button--secondary {
+  border-color: rgb(130 101 62 / 28%);
+  background: rgb(255 255 255 / 84%);
+  color: #211d18;
+}
+.button--secondary:hover:not(:disabled) {
+  border-color: rgb(155 116 62 / 50%);
+  background: #fff;
+}
+.button--subtle { color: #39332c; }
+
+.site-header {
+  background: linear-gradient(180deg, rgb(250 248 246 / 91%), rgb(250 248 246 / 52%));
+}
+.site-header__frame {
+  border-color: rgb(255 255 255 / 94%);
+  background: rgb(255 255 255 / 82%);
+  box-shadow: 0 .75rem 2.2rem rgb(73 57 37 / 7%), inset 0 1px 0 #fff;
+}
+.brand__mark, .destination-card__icon, .profile-card__monogram {
+  border-color: rgb(158 123 73 / 26%);
+  background: linear-gradient(145deg, #fff, #f4eee5);
+  color: #30271c;
+}
+.card, .public-projects__card, .public-education__entry {
+  border-color: rgb(130 105 73 / 18%);
+  background: linear-gradient(145deg, rgb(255 255 255 / 93%), rgb(250 247 243 / 88%));
+  box-shadow: 0 .85rem 2.3rem rgb(75 57 35 / 6%), inset 0 1px 0 #fff;
+  backdrop-filter: blur(14px) saturate(125%);
+}
+.card--outlined { background: rgb(255 255 255 / 72%); }
+.card--glow {
+  border-color: rgb(166 127 70 / 28%);
+  background: linear-gradient(145deg, rgb(255 255 255 / 96%), rgb(247 241 232 / 92%));
+  box-shadow: 0 1.2rem 3rem rgb(89 66 35 / 8%), inset 0 0 2.5rem rgb(174 139 88 / 4%);
+}
+.hero-art {
+  border-color: rgb(159 126 82 / 24%);
+  background: linear-gradient(145deg, #fffdfa, #f3ede5 58%, #fff);
+  box-shadow: 0 1.5rem 4rem rgb(92 70 43 / 9%), inset 0 1px 0 #fff;
+}
+.hero-art__monogram {
+  color: #201b15;
+  border-color: rgb(173 139 88 / 34%);
+  background: linear-gradient(145deg, #fff, #f3eadc);
+  text-shadow: none;
+}
+.hero-art__caption { color: #4d4030; }
+.hero-art__caption-line { background: linear-gradient(90deg, #b38a4f, transparent); }
+
+.contact-cta {
+  border-color: rgb(151 119 75 / 18%);
+  background: linear-gradient(110deg, rgb(255 255 255 / 88%), rgb(246 239 229 / 82%));
+}
+.form-control {
+  border-color: rgb(119 98 72 / 28%);
+  background: rgb(255 255 255 / 90%);
+  color: #171513;
+}
+.form-control::placeholder { color: #777068; }
+.form-control:focus-visible {
+  border-color: rgb(155 116 62 / 58%);
+  box-shadow: 0 0 0 3px rgb(155 116 62 / 12%);
+}
+::selection { color: #211a10; background: rgb(201 169 119 / 32%); }
+:focus-visible { outline-color: #98713e; }
+
+@media (max-width: 48rem) {
+  html {
+    background-attachment: scroll;
+    background-size: auto 100vh;
+    background-position: center top;
+  }
+}
