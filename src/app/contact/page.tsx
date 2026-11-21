@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import {
   Mail,
-  Facebook,
   Github,
-  Linkedin,
+  BriefcaseBusiness,
   MessageCircle,
   Instagram,
-  Youtube,
+  CirclePlay,
   Send,
   ExternalLink,
+  Users,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Container } from "@/components/ui/container";
@@ -26,12 +26,12 @@ export const metadata: Metadata = {
 
 function socialIcon(label: string) {
   const value = label.toLowerCase();
-  if (value.includes("facebook")) return Facebook;
+  if (value.includes("facebook")) return Users;
   if (value.includes("github")) return Github;
-  if (value.includes("linkedin")) return Linkedin;
+  if (value.includes("linkedin")) return BriefcaseBusiness;
   if (value.includes("whatsapp")) return MessageCircle;
   if (value.includes("instagram")) return Instagram;
-  if (value.includes("youtube")) return Youtube;
+  if (value.includes("youtube")) return CirclePlay;
   if (value.includes("telegram")) return Send;
   if (value.includes("mail") || value.includes("gmail") || value.includes("email")) return Mail;
   return ExternalLink;
