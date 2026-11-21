@@ -14,12 +14,26 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://bigyansanjyal.com.np"),
   title: {
     default: "Bigyan Sanjyal | Personal Website",
     template: "%s | Bigyan Sanjyal",
   },
   description:
     "Projects, skills, writing, and ideas from Bigyan Sanjyal, a Computer Engineering student.",
+  openGraph: {
+    type: "website",
+    siteName: "Bigyan Sanjyal",
+    title: "Bigyan Sanjyal | Personal Website",
+    description:
+      "Projects, skills, writing, and ideas from Bigyan Sanjyal, a Computer Engineering student.",
+  },
+  twitter: {
+    card: "summary",
+    title: "Bigyan Sanjyal | Personal Website",
+    description:
+      "Projects, skills, writing, and ideas from Bigyan Sanjyal, a Computer Engineering student.",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

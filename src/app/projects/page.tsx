@@ -13,7 +13,10 @@ import { ProjectImageGallery } from "./project-image-gallery";
 
 export const metadata: Metadata = {
   title: "Projects",
-  description: "Published projects by Bigyan Sanjyal.",
+  description: "Explore published projects by Bigyan Sanjyal, including project details, technologies, and links.",
+  alternates: {
+    canonical: "/projects",
+  },
 };
 
 export default function ProjectsPage() {

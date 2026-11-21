@@ -11,7 +11,10 @@ import { getPublishedEducation } from "@/lib/public-education";
 
 export const metadata: Metadata = {
   title: "Education",
-  description: "Published education records and study timelines.",
+  description: "View published education records and academic study details for Bigyan Sanjyal.",
+  alternates: {
+    canonical: "/education",
+  },
 };
 
 export default function EducationPage() {

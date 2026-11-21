@@ -11,7 +11,10 @@ import { ProfileSocialLinks } from "./profile-social-links";
 
 export const metadata: Metadata = {
   title: "About",
-  description: "Public profile and biography information.",
+  description: "Learn about Bigyan Sanjyal, his background, interests, and journey in Computer Engineering.",
+  alternates: {
+    canonical: "/about",
+  },
 };
 
 export default function AboutPage() {

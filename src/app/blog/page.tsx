@@ -19,7 +19,10 @@ import { getPublicBlogListing } from "@/lib/public-blog";
 
 export const metadata: Metadata = {
   title: "Blog and Journal",
-  description: "Published articles, learning notes, and reflections by Bigyan Sanjyal.",
+  description: "Read published articles, learning notes, and reflections by Bigyan Sanjyal.",
+  alternates: {
+    canonical: "/blog",
+  },
 };
 
 export default function BlogPage({

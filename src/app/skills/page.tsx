@@ -11,7 +11,10 @@ import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
   title: "Skills",
-  description: "Published skills and proficiency details.",
+  description: "Explore published technical skills and proficiency details listed by Bigyan Sanjyal.",
+  alternates: {
+    canonical: "/skills",
+  },
 };
 
 export default function SkillsPage() {

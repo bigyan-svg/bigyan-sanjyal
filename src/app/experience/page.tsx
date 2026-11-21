@@ -12,7 +12,10 @@ import { workExperienceEmploymentTypeLabel } from "@/lib/work-experience-validat
 
 export const metadata: Metadata = {
   title: "Work Experience",
-  description: "Published work experience records and role timelines.",
+  description: "View published work experience records and professional role details for Bigyan Sanjyal.",
+  alternates: {
+    canonical: "/experience",
+  },
 };
 
 export default function ExperiencePage() {

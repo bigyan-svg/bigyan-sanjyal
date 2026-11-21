@@ -6,7 +6,16 @@ import { Card } from "@/components/ui/card";
 import { Container } from "@/components/ui/container";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { getProfileInitials, getPublicSiteProfile } from "@/lib/site-profile";
+import type { Metadata } from "next";
 
+export const metadata: Metadata = {
+  title: "Home",
+  description:
+    "The personal portfolio and learning journal of Bigyan Sanjyal, a Computer Engineering student. Explore projects, skills, education, and writing.",
+  alternates: {
+    canonical: "/",
+  },
+};
 const destinations = [
   {
     href: "/about",

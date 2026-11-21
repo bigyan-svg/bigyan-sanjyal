@@ -7,7 +7,10 @@ import { ContactForm } from "./contact-form";
 
 export const metadata: Metadata = {
   title: "Contact",
-  description: "Send a message through the Contact page.",
+  description: "Contact Bigyan Sanjyal using the website's message form for questions and project inquiries.",
+  alternates: {
+    canonical: "/contact",
+  },
 };
 
 export default function ContactPage() {

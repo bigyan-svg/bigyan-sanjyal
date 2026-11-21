@@ -22,7 +22,12 @@ export async function generateMetadata({ params }: BlogArticlePageProps): Promis
   const result = await getPublishedBlogPostBySlug(slug);
   const articleMetadata = getPublishedBlogArticleMetadata(result);
 
-  return articleMetadata ?? {};
+  return {
+    ...(articleMetadata ?? {}),
+    alternates: {
+      canonical: `/blog/${slug}`,
+    },
+  };
 }
 
 export default function BlogArticlePage({ params }: BlogArticlePageProps) {
