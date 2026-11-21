@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { connection } from "next/server";
+import { Suspense } from "react";
 import {
   Mail,
   Code2,
@@ -38,13 +38,7 @@ function socialIcon(label: string) {
   return ExternalLink;
 }
 
-export default async function ContactPage() {
-  // Cache Components requires connection() instead of route-level dynamic config
-  // when the page reads live, uncached profile data.
-  await connection();
-  const profile = await getPublicSiteProfile();
-  const socialLinks = profile?.socialLinks ?? [];
-
+export default function ContactPage() {
   return (
     <>
       <PageIntro
@@ -55,58 +49,25 @@ export default async function ContactPage() {
       />
       <section aria-labelledby="contact-content-title" className="section page-content">
         <Container>
-          <h2 className="sr-only" id="contact-content-title">
-            Contact details and message form
-          </h2>
+          <h2 className="sr-only" id="contact-content-title">Contact details and message form</h2>
           <div className="contact-grid">
             <Card className="contact-details" variant="outlined">
-              <span aria-hidden="true" className="destination-card__icon">
-                <Mail size={20} />
-              </span>
+              <span aria-hidden="true" className="destination-card__icon"><Mail size={20} /></span>
               <p className="eyebrow">Contact details</p>
               <h2>Connect with me.</h2>
-              <p>
-                Use the message form or choose one of my public profiles below.
-              </p>
+              <p>Use the message form or choose one of my public profiles below.</p>
             </Card>
-
-            <Card className="contact-form-card" variant="glow">
-              <ContactForm />
-            </Card>
+            <Card className="contact-form-card" variant="glow"><ContactForm /></Card>
           </div>
-
           <section aria-labelledby="social-contact-title" className="contact-social">
             <div className="section-heading">
               <p className="eyebrow">Around the web</p>
               <h2 id="social-contact-title">Find me on social platforms.</h2>
               <p>Choose a profile to connect, follow, or send a message.</p>
             </div>
-            {socialLinks.length > 0 ? (
-              <nav aria-label="Social and contact profiles" className="contact-social__links">
-                {socialLinks.map((link) => {
-                  const Icon = socialIcon(link.label);
-                  return (
-                    <a
-                      className="contact-social__link"
-                      href={link.url}
-                      key={link.label + link.url}
-                      rel="noopener noreferrer"
-                      target="_blank"
-                    >
-                      <span className="contact-social__icon" aria-hidden="true">
-                        <Icon size={20} />
-                      </span>
-                      <span>{link.label}</span>
-                      <ExternalLink aria-hidden="true" className="contact-social__external" size={14} />
-                    </a>
-                  );
-                })}
-              </nav>
-            ) : (
-              <p className="contact-social__empty">
-                Social profiles will appear here when they are added in the website profile settings.
-              </p>
-            )}
+            <Suspense fallback={<p className="contact-social__empty">Loading public profiles…</p>}>
+              <SocialProfiles />
+            </Suspense>
           </section>
         </Container>
       </section>
