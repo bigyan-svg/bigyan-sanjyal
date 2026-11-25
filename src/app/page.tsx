@@ -75,9 +75,9 @@ export default function Home() {
                 src="/images/bigyan-profile.jpg"
                 alt="Portrait of Bigyan Sanjyal"
                 fill
-                priority
-                unoptimized
-                sizes="(max-width: 48rem) 82vw, (max-width: 75rem) 42vw, 500px"
+                preload
+                fetchPriority="high"
+                sizes="(max-width: 48rem) 82vw, (max-width: 75rem) 40vw, 500px"
                 className="hero-profile__image"
               />
             </div>
