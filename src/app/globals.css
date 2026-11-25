@@ -7344,7 +7344,8 @@ body, p, li, label, small, strong, .brand__name,
 .route-transition {
   position: relative;
   isolation: isolate;
-  animation: route-arrive 520ms cubic-bezier(.2,.72,.18,1) both;
+  /* Use only compositor-friendly properties; avoid blur/scale repainting the page. */
+  animation: route-arrive 240ms cubic-bezier(.2,.72,.18,1) both;
 }
 .route-transition::before {
   position: absolute;
@@ -7369,17 +7370,11 @@ body, p, li, label, small, strong, .brand__name,
 @keyframes route-arrive {
   from {
     opacity: 0;
-    transform: translate3d(0, 16px, 0) scale(.994);
-    filter: blur(5px);
-  }
-  65% {
-    opacity: 1;
-    filter: blur(0);
+    transform: translate3d(0, 8px, 0);
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 @keyframes route-gold-sweep {
